@@ -1,0 +1,18 @@
+# Local single-origin entry point (docs/deployment.md): mirrors the production routing
+# so the built web image can reach the API on the same origin. Plain HTTP, no TLS.
+http://localhost:8080 {
+	request_body {
+		max_size 128MB
+	}
+
+	@api path /v1/* /api/* /oauth/* /mcp /mcp/* /.well-known/*
+	handle @api {
+		reverse_proxy api:8000 {
+			flush_interval -1
+		}
+	}
+
+	handle {
+		reverse_proxy web:3000
+	}
+}

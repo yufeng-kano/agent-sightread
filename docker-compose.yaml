@@ -60,10 +60,18 @@ services:
       - api
     ports:
       - "127.0.0.1:3000:3000"
-    # The web app only ever calls the API on its own origin. Production gets that from
-    # Caddy; here the two are separate ports, so the signed-in pages of this container
-    # cannot reach the API — use `pnpm dev` (its proxy reproduces the split) for those,
-    # and this service for checking the built image (docs/deployment.md).
+
+  # The web app only ever calls the API on its own origin; caddy provides that origin
+  # locally exactly like production does — use http://localhost:8080 for the full stack.
+  caddy:
+    image: caddy:2
+    depends_on:
+      - api
+      - web
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./deploy/caddy/Caddyfile.local:/etc/caddy/Caddyfile:ro
 
 volumes:
   pgdata:

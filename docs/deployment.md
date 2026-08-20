@@ -8,11 +8,10 @@ Compose `-f` merge semantics surprise people; each file is complete and readable
 
 ### `docker-compose.yaml` — local
 
-- Services: `pg`, `api`, `worker`, `web`. No Caddy, plain HTTP, ports exposed: web `3000`, api `8000`, pg `5432` (localhost only).
-- `env_file: .env` (copy from `.env.example`); `APP_ENV=local`, `AUTH_DEV_MODE=true` works here so the stack is demoable without Google credentials.
+- Services: `pg`, `api`, `worker`, `web`, `caddy` (plain HTTP on `8080` via `deploy/caddy/Caddyfile.local`, mirroring the production routing so the built web image reaches the API on one origin). Direct ports stay exposed too: web `3000`, api `8000`, pg `${PG_PORT:-5432}` (all localhost only). **Use http://localhost:8080 for the full experience.**
+- `env_file: .env` (copy from `.env.example`); `APP_ENV=local`, `AUTH_DEV_MODE=true` works here so the stack is demoable without Google credentials. Set `APP_URL`/`WEB_URL` to `http://localhost:8080` so OAuth discovery documents point at the joined origin.
 - Volumes: `pgdata`, `uploads` (shared by api + worker).
 - Day-to-day dev still runs `uv run uvicorn` / `pnpm dev` natively for hot reload; the compose file is for integration runs.
-- The built `web` container is the image check, not a working control plane: the app calls the API on its own origin, and locally there is no Caddy to join the two ports. Signed-in pages need `pnpm dev` (its proxy reproduces the split) or the production stack.
 
 ### `docker-compose.production.yaml` — used as `docker compose -f docker-compose.production.yaml up -d`
 
