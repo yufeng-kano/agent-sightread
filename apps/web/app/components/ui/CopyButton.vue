@@ -1,0 +1,51 @@
+<script setup lang="ts">
+/**
+ * Copy one value to the clipboard, confirming in place by swapping the glyph to a check.
+ *
+ * The confirmation is announced too, not just drawn: a screen-reader user pressing Copy
+ * otherwise gets no feedback at all.
+ */
+const props = defineProps<{ text: string; variant?: 'secondary' | 'ghost' }>()
+
+const { t } = useI18n()
+const copied = ref(false)
+let resetTimer: ReturnType<typeof setTimeout> | undefined
+
+async function copy() {
+  try {
+    await navigator.clipboard.writeText(props.text)
+  } catch {
+    // Clipboard access can be denied (insecure context, permissions); the value stays
+    // selectable on the page, so there is nothing to report.
+    return
+  }
+  copied.value = true
+  clearTimeout(resetTimer)
+  resetTimer = setTimeout(() => {
+    copied.value = false
+  }, 1600)
+}
+
+onUnmounted(() => clearTimeout(resetTimer))
+</script>
+
+<template>
+  <span class="copy">
+    <UiButton
+      :variant="variant ?? 'ghost'"
+      icon-only
+      :label="copied ? t('common.copied') : t('common.copy')"
+      @click="copy"
+    >
+      <template #icon><UiIcon :name="copied ? 'check' : 'copy'" /></template>
+    </UiButton>
+    <span class="sr-only" role="status" aria-live="polite">{{ copied ? t('common.copied') : '' }}</span>
+  </span>
+</template>
+
+<style scoped>
+.copy {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+</style>
