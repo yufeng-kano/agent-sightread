@@ -1,0 +1,68 @@
+"""FastAPI wiring.
+
+Phase 1 mounts `/api` (control plane) and `/v1` (data plane). `/oauth`, `/mcp` and
+`/.well-known/*` land here as later phases add them.
+"""
+
+from __future__ import annotations
+
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from starlette.middleware.sessions import SessionMiddleware
+
+from .auth.oidc import build_oauth
+from .config import Settings, get_settings
+from .db.session import create_engine, create_sessionmaker
+from .errors import install_error_handlers
+from .routes import control, v1
+
+# Signed cookie holding only the transient OIDC state/PKCE verifier during a login
+# round trip. The durable credential is the server-side session row.
+OIDC_STATE_COOKIE = "sr_oidc"
+OIDC_STATE_MAX_AGE_SECONDS = 600
+
+
+def create_app(settings: Settings | None = None) -> FastAPI:
+    settings = settings or get_settings()
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        # `create_engine` does not connect, so startup succeeds without a live database.
+        engine = create_engine(settings.database_url)
+        app.state.engine = engine
+        app.state.sessionmaker = create_sessionmaker(engine)
+        try:
+            yield
+        finally:
+            await engine.dispose()
+
+    app = FastAPI(title="agent-sightread", lifespan=lifespan)
+    app.state.settings = settings
+    app.state.oauth = build_oauth(settings)
+
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=settings.secret_key,
+        session_cookie=OIDC_STATE_COOKIE,
+        max_age=OIDC_STATE_MAX_AGE_SECONDS,
+        same_site="lax",
+        https_only=True,
+    )
+
+    install_error_handlers(app)
+
+    app.include_router(control.router)
+    if settings.dev_login_enabled:
+        app.include_router(control.dev_router)
+    app.include_router(v1.router)
+
+    @app.get("/healthz")
+    async def healthz() -> dict[str, bool]:
+        """Liveness only — deliberately does not touch the database."""
+        return {"ok": True}
+
+    return app
+
+
+app = create_app()
