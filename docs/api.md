@@ -76,11 +76,11 @@ Preset profiles (id, name, model, bbox_format, description).
 |-------|---------|
 | `GET /api/auth/login` → Google, `GET /api/auth/callback`, `POST /api/auth/logout` | OIDC flow ([auth.md](./auth.md)) |
 | `GET /api/me` | current user + settings + whether an OpenRouter key is stored (masked, never the value) |
-| `GET/POST/DELETE /api/keys` | API keys; plaintext returned exactly once on create |
+| `GET/POST /api/keys`, `DELETE /api/keys/{id}` | API keys; `POST` returns the created key (with plaintext) exactly once, unwrapped; `GET` wraps as `{keys: []}` |
 | `GET/PUT/DELETE /api/openrouter-key` | read masked form / store (validated against `GET https://openrouter.ai/api/v1/key` before save) / remove |
 | `PUT /api/settings` | default model / profile |
 | `GET /api/usage?days=30` | per-day and per-model aggregates of tokens + cost from `usage_log` |
-| `GET /api/jobs?limit=50` | recent jobs (history); `GET /api/jobs/{id}/result` same payload as data plane |
+| `GET /api/jobs?limit=50` | recent jobs (history): `job_id`, `kind`, `filename`, `status`, `model`, `profile`, `page_count`, `pages_done`, `error`, timestamps — no per-job cost (usage is aggregated per day/model only); `GET /api/jobs/{id}/result` same payload as data plane |
 
 ## Limits (defaults, env-overridable)
 

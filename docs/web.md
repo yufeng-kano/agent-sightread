@@ -10,11 +10,11 @@ Nuxt (latest stable) + TypeScript + `@nuxtjs/i18n` (en, zh-TW; en is the source 
 
 | Page | Rendering | Content |
 |------|-----------|---------|
-| `/` landing | **SSR, public** — the SEO surface: meta tags, OG, sitemap | what the service is, how the API/connector works, link to sign in |
+| `/` landing | **prerendered, public** (en + `/zh-TW`, hreflang) — the SEO surface: meta tags, OG. Sitemap deferred: needs the public origin (`i18n.baseUrl`), configure when a host exists | what the service is, how the API/connector works, link to sign in |
 | `/dashboard` | client-side, authed | usage: cost + tokens per day and per model (`GET /api/usage`) |
 | `/keys` | client-side, authed | API key list/create/revoke; plaintext shown once; MCP endpoint URL + "add to Claude" instructions |
 | `/settings` | client-side, authed | OpenRouter key (masked, save validates upstream), default model (from `GET /v1/models`, recommended profiles first), default profile |
-| `/jobs` | client-side, authed | parse history: filename, status, model, cost, link to raw result JSON |
+| `/jobs` | client-side, authed | parse history: filename, status, model, pages, expandable raw result JSON (per-job cost not exposed yet — usage aggregates only) |
 
 ## Rules
 
