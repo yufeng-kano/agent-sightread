@@ -1,0 +1,326 @@
+"""`POST /v1/parse` through the worker to the result, with OpenRouter stubbed.
+
+This is the phase's integration test: a real PDF, real Poppler subprocesses, a real claim
+cycle, and not one byte of live upstream traffic (docs/testing.md § Cost safety).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import uuid
+from pathlib import Path
+
+import httpx
+import pytest
+import respx
+from httpx import AsyncClient
+from sqlalchemy import select
+
+from sightread.auth.crypto import encrypt_openrouter_key
+from sightread.db.models import Job, OpenRouterKey, UsageLog
+from sightread.jobs.queue import claim_next_job
+from sightread.jobs.runner import run_job
+from sightread.upstream.openrouter import CHAT_URL
+from tests.conftest import CSRF_HEADERS, DATABASE_URL, TEST_SECRET_KEY
+from tests.test_jobs_queue import postgres_only
+
+MODEL = "vendor/vision-model"
+FIGURE_JSON = json.dumps([{"bbox": [120, 60, 480, 940], "caption": "Figure 1: the chart"}])
+VISION_MARKDOWN = (
+    "## Scanned page\n\n"
+    "![fig](sightread://p9/200,100,600,900)\n"
+    "Figure 2: the photograph\n\n"
+    "Body text."
+)
+
+
+def _completion(content: str) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "choices": [{"message": {"content": content}}],
+            "usage": {"prompt_tokens": 900, "completion_tokens": 120, "cost": "0.001500"},
+        },
+    )
+
+
+def _openrouter_stub(request: httpx.Request) -> httpx.Response:
+    """Answer as a transcription or a figure detection, depending on the prompt sent."""
+    prompt = json.loads(request.content)["messages"][0]["content"][0]["text"]
+    if "JSON array" in prompt:
+        return _completion(FIGURE_JSON)
+    return _completion(VISION_MARKDOWN)
+
+
+async def _authorize(client: AsyncClient, sessionmaker) -> AsyncClient:
+    """Give a client an API key and a stored OpenRouter key."""
+    assert (await client.post("/api/auth/dev-login", headers=CSRF_HEADERS)).status_code == 200
+    created = await client.post("/api/keys", json={"name": "test"}, headers=CSRF_HEADERS)
+    user_id = (await client.get("/api/me")).json()["user"]["id"]
+
+    async with sessionmaker() as db:
+        db.add(
+            OpenRouterKey(
+                user_id=user_id,
+                ciphertext=encrypt_openrouter_key(TEST_SECRET_KEY, "sk-or-v1-test"),
+                masked="sk-or-v1...test",
+            )
+        )
+        await db.commit()
+
+    client.headers["Authorization"] = f"Bearer {created.json()['key']}"
+    return client
+
+
+@pytest.fixture
+async def api_client(make_client, sessionmaker) -> AsyncClient:
+    return await _authorize(make_client(), sessionmaker)
+
+
+async def _drain_queue(client: AsyncClient, sessionmaker) -> uuid.UUID | None:
+    """One worker cycle in-process: claim a job and run it to a terminal state."""
+    settings = client.app.state.settings
+    async with sessionmaker() as db:
+        job_id = await claim_next_job(db, settings.max_jobs_per_user)
+    if job_id is not None:
+        await run_job(sessionmaker, settings, job_id, asyncio.Semaphore(2))
+    return job_id
+
+
+async def _upload(client: AsyncClient, path: Path, **fields) -> httpx.Response:
+    return await client.post(
+        "/v1/parse",
+        files={"file": (path.name, path.read_bytes(), "application/pdf")},
+        data={"model": MODEL, **fields},
+    )
+
+
+@respx.mock
+async def test_parse_a_mixed_pdf_end_to_end(api_client, sessionmaker, documents) -> None:
+    respx.post(CHAT_URL).mock(side_effect=_openrouter_stub)
+
+    accepted = await _upload(api_client, documents["mixed_pdf"])
+    assert accepted.status_code == 202, accepted.text
+    job_id = accepted.json()["job_id"]
+    assert accepted.json()["status"] == "queued"
+
+    assert str(await _drain_queue(api_client, sessionmaker)) == job_id
+
+    status = (await api_client.get(f"/v1/jobs/{job_id}")).json()
+    assert status["status"] == "succeeded"
+    assert (status["page_count"], status["pages_done"]) == (3, 3)
+
+    result = (await api_client.get(f"/v1/jobs/{job_id}/result")).json()
+    methods = [page["method"] for page in result["pages"]]
+    assert methods == ["text_layer", "vision", "vision"]
+    assert [page["page"] for page in result["pages"]] == [1, 2, 3]
+    assert result["pages"][0]["width_pt"] == 612.0
+    assert result["errors"] == []
+
+    # Figures: one appended to the text-layer page, one inline from each vision page.
+    assert [figure["id"] for figure in result["figures"]] == ["fig1", "fig2", "fig3"]
+    assert result["figures"][0] == {
+        "id": "fig1",
+        "page": 1,
+        "bbox": [120, 60, 480, 940],
+        "caption": "Figure 1: the chart",
+    }
+    # The page number in a placeholder is ours, not the model's claim of "p9".
+    assert "![fig2](sightread://p2/200,100,600,900)" in result["markdown"]
+    assert "Figure 2: the photograph" in result["markdown"]
+    assert "the quick brown fox" in result["markdown"]
+
+    assert result["meta"] == {
+        "model": MODEL,
+        "profile": None,
+        "bbox_format": "yxyx_norm1000",
+        "pipeline_version": 1,
+        "sha256": result["meta"]["sha256"],
+        "cached": False,
+    }
+    assert len(result["meta"]["sha256"]) == 64
+
+    async with sessionmaker() as db:
+        job = await db.get(Job, uuid.UUID(job_id))
+        assert job.source_deleted_at is not None
+        assert not Path(job.source_path).exists()
+        usage = (
+            (await db.execute(select(UsageLog).where(UsageLog.job_id == job.id))).scalars().all()
+        )
+    # One upstream call per page: figure detection for the text page, transcription twice.
+    assert len(usage) == 3
+    assert {row.model for row in usage} == {MODEL}
+    assert sum(row.prompt_tokens for row in usage) == 2700
+    assert float(sum(row.cost for row in usage)) == pytest.approx(0.0045)
+
+
+@respx.mock
+async def test_parse_an_image(api_client, sessionmaker, documents) -> None:
+    respx.post(CHAT_URL).mock(side_effect=_openrouter_stub)
+
+    accepted = await api_client.post(
+        "/v1/parse",
+        files={"file": ("tiny.png", documents["wide_png"].read_bytes(), "image/png")},
+        data={"model": MODEL},
+    )
+    assert accepted.status_code == 202, accepted.text
+    job_id = accepted.json()["job_id"]
+    await _drain_queue(api_client, sessionmaker)
+
+    result = (await api_client.get(f"/v1/jobs/{job_id}/result")).json()
+    # Page space is the original pixel size, not the downscaled copy we sent upstream.
+    assert result["pages"] == [
+        {"page": 1, "width_pt": 3000.0, "height_pt": 1000.0, "method": "vision", "error": None}
+    ]
+    assert result["figures"][0]["page"] == 1
+    assert "![fig1](sightread://p1/200,100,600,900)" in result["markdown"]
+
+    async with sessionmaker() as db:
+        job = await db.get(Job, uuid.UUID(job_id))
+    assert job.kind == "image"
+    assert not Path(job.source_path).exists()
+    # The rendered/normalized copy is gone with the job's work directory.
+    assert list(Path(api_client.app.state.settings.upload_dir).iterdir()) == []
+
+
+@respx.mock
+async def test_second_identical_upload_is_served_from_the_cache(
+    api_client, sessionmaker, documents
+) -> None:
+    respx.post(CHAT_URL).mock(side_effect=_openrouter_stub)
+    await _upload(api_client, documents["text_pdf"])
+    await _drain_queue(api_client, sessionmaker)
+    calls_after_first = respx.calls.call_count
+
+    cached = await _upload(api_client, documents["text_pdf"])
+
+    assert cached.status_code == 200
+    assert cached.json()["meta"]["cached"] is True
+    assert cached.json()["markdown"]
+    assert respx.calls.call_count == calls_after_first
+    # The fresh upload was deleted; only the first job's (already removed) file existed.
+    upload_dir = Path(api_client.app.state.settings.upload_dir)
+    assert list(upload_dir.iterdir()) == []
+
+    forced = await _upload(api_client, documents["text_pdf"], force="true")
+    assert forced.status_code == 202
+    assert forced.json()["job_id"] != cached.json().get("job_id")
+
+
+@respx.mock
+async def test_a_page_that_cannot_be_transcribed_fails_alone(
+    api_client, sessionmaker, documents
+) -> None:
+    responses = [httpx.Response(500), _completion(FIGURE_JSON)]
+    respx.post(CHAT_URL).mock(side_effect=responses)
+
+    accepted = await _upload(api_client, documents["mixed_pdf"], pages="1,2")
+    job_id = accepted.json()["job_id"]
+    await _drain_queue(api_client, sessionmaker)
+
+    result = (await api_client.get(f"/v1/jobs/{job_id}/result")).json()
+    reasons = {entry["page"]: entry["reason"] for entry in result["errors"]}
+    assert len(reasons) == 1
+    assert "upstream call failed" in reasons.values()
+    assert result["markdown"]
+
+
+@respx.mock
+async def test_a_second_402_aborts_the_job(api_client, sessionmaker, documents) -> None:
+    respx.post(CHAT_URL).mock(return_value=httpx.Response(402))
+
+    accepted = await _upload(api_client, documents["mixed_pdf"])
+    job_id = accepted.json()["job_id"]
+    await _drain_queue(api_client, sessionmaker)
+
+    status = (await api_client.get(f"/v1/jobs/{job_id}")).json()
+    assert status["status"] == "failed"
+    assert status["error"] == "OpenRouter reported exhausted credits"
+    assert (await api_client.get(f"/v1/jobs/{job_id}/result")).status_code == 404
+
+
+@respx.mock
+async def test_rate_limits_back_off_and_shrink_the_job_budget(
+    api_client, sessionmaker, documents, monkeypatch
+) -> None:
+    monkeypatch.setattr("sightread.jobs.runner.VISION_BACKOFF_BASE_SECONDS", 0.001)
+    respx.post(CHAT_URL).mock(
+        side_effect=[
+            httpx.Response(429, headers={"Retry-After": "0"}),
+            _completion(FIGURE_JSON),
+        ]
+    )
+
+    accepted = await _upload(api_client, documents["text_pdf"])
+    job_id = accepted.json()["job_id"]
+    await _drain_queue(api_client, sessionmaker)
+
+    status = (await api_client.get(f"/v1/jobs/{job_id}")).json()
+    assert status["status"] == "succeeded"
+    assert respx.calls.call_count == 2
+
+
+@respx.mock
+async def test_events_replay_the_final_state_of_a_terminal_job(
+    api_client, sessionmaker, documents
+) -> None:
+    respx.post(CHAT_URL).mock(side_effect=_openrouter_stub)
+    accepted = await _upload(api_client, documents["text_pdf"])
+    job_id = accepted.json()["job_id"]
+    await _drain_queue(api_client, sessionmaker)
+
+    frames = []
+    async with api_client.stream("GET", f"/v1/jobs/{job_id}/events") as response:
+        assert response.headers["content-type"].startswith("text/event-stream")
+        async for line in response.aiter_lines():
+            frames.append(line)
+
+    body = "\n".join(frames)
+    assert "event: progress" in body
+    assert "event: done" in body
+    payload = json.loads(body.split("event: done\ndata: ")[1].splitlines()[0])
+    assert payload["meta"]["cached"] is False
+    assert payload["markdown"]
+
+
+@postgres_only
+@respx.mock
+async def test_the_event_stream_follows_a_job_it_is_already_watching(
+    make_client, sessionmaker, documents
+) -> None:
+    """The LISTEN/NOTIFY wakeup path, which only exists on PostgreSQL."""
+    respx.post(CHAT_URL).mock(side_effect=_openrouter_stub)
+    client = await _authorize(make_client(database_url=DATABASE_URL), sessionmaker)
+    job_id = (await _upload(client, documents["text_pdf"])).json()["job_id"]
+
+    async def collect() -> list[str]:
+        frames: list[str] = []
+        async with client.stream("GET", f"/v1/jobs/{job_id}/events") as response:
+            async for line in response.aiter_lines():
+                frames.append(line)
+        return frames
+
+    watching = asyncio.create_task(collect())
+    await asyncio.sleep(0.2)
+    await _drain_queue(client, sessionmaker)
+
+    body = "\n".join(await asyncio.wait_for(watching, timeout=20))
+    assert "event: progress" in body
+    assert "event: done" in body
+
+
+async def test_a_job_without_a_stored_key_fails_cleanly(
+    make_client, sessionmaker, documents
+) -> None:
+    client = make_client()
+    await client.post("/api/auth/dev-login", headers=CSRF_HEADERS)
+    created = await client.post("/api/keys", json={"name": "test"}, headers=CSRF_HEADERS)
+    client.headers["Authorization"] = f"Bearer {created.json()['key']}"
+
+    accepted = await _upload(client, documents["text_pdf"])
+    await _drain_queue(client, sessionmaker)
+
+    status = (await client.get(f"/v1/jobs/{accepted.json()['job_id']}")).json()
+    assert status["status"] == "failed"
+    assert status["error"] == "no OpenRouter key stored"

@@ -22,6 +22,7 @@ from ..auth.oidc import DEV_USER_EMAIL, DEV_USER_SUB, upsert_user
 from ..auth.sessions import SESSION_COOKIE, SESSION_TTL, create_session, delete_session
 from ..db.models import ApiKey, Job, OpenRouterKey, Result, UsageLog, UserSettings, utcnow
 from ..errors import ApiError
+from ..jobs.runner import result_payload
 from ..parsing.profiles import get_profile
 from ..upstream.openrouter import validate_api_key
 
@@ -372,10 +373,4 @@ async def job_result(job_id: uuid.UUID, user: SessionUser, db: DbSession):
     result = (await db.execute(select(Result).where(Result.job_id == job_id))).scalar_one_or_none()
     if result is None:
         raise ApiError(404, "invalid_request", "This job has no result yet")
-    return {
-        "markdown": result.markdown,
-        "pages": result.pages,
-        "figures": result.figures,
-        "errors": result.errors,
-        "meta": result.meta,
-    }
+    return result_payload(result)

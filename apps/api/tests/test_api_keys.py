@@ -39,10 +39,10 @@ async def test_bearer_key_authenticates_the_data_plane(signed_in: AsyncClient) -
     created = await signed_in.post("/api/keys", json={"name": "ci"}, headers=CSRF_HEADERS)
     plaintext = created.json()["key"]
 
-    # /v1/parse is not implemented yet; reaching its 501 proves the key authenticated.
+    # Reaching request validation (rather than 401) proves the key authenticated.
     accepted = await signed_in.post("/v1/parse", headers={"Authorization": f"Bearer {plaintext}"})
-    assert accepted.status_code == 501
-    assert accepted.json()["error"]["type"] == "internal"
+    assert accepted.status_code == 400
+    assert accepted.json()["error"]["type"] == "invalid_request"
 
     rejected = await signed_in.post("/v1/parse", headers={"Authorization": "Bearer sr_wrongkey"})
     assert rejected.status_code == 401
