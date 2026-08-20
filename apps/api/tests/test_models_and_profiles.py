@@ -36,6 +36,14 @@ CATALOG = {
             "architecture": {"input_modalities": ["text", "image"]},
         },
         {
+            # A newer routing variant of a newer base model: offline batch inference,
+            # which a profile must never resolve to.
+            "id": "google/gemini-3.7-flash:batch",
+            "name": "Gemini 3.7 Flash (batch)",
+            "created": 1_760_000_000,
+            "architecture": {"input_modalities": ["text", "image"]},
+        },
+        {
             "id": "anthropic/claude-vision",
             "name": "Claude Vision",
             "created": 1_745_000_000,
@@ -75,8 +83,11 @@ async def test_models_are_filtered_to_image_input(signed_in: AsyncClient) -> Non
         "google/gemini-2.5-flash",
         "google/gemini-2.0-flash-001",
         "google/gemini-2.5-flash-lite",
+        "google/gemini-3.7-flash:batch",
         "anthropic/claude-vision",
     ]
+    # The catalog still lists every image-input model, variants included; only the base
+    # id a preset resolves to is flagged.
     recommended = [model["id"] for model in models if model["recommended"]]
     assert recommended == ["google/gemini-2.5-flash"]
 
@@ -103,6 +114,24 @@ async def test_profiles_resolve_a_live_model(signed_in: AsyncClient) -> None:
     assert profile["model"] == "google/gemini-2.5-flash"
     assert profile["bbox_format"] == "yxyx_norm1000"
     assert profile["available"] is True
+
+
+def test_profile_never_resolves_to_a_variant_suffix() -> None:
+    """`:batch` is offline inference and `:free`/`:nitro` are routing variants: a preset
+    resolves to the base id even when a variant is newer."""
+    profile = get_profile("gemini-yxyx")
+    assert profile is not None
+    catalog = [
+        {"id": "google/gemini-x-flash:batch", "created": 1_760_000_000},
+        {"id": "google/gemini-x-flash", "created": 1_750_000_000},
+        {"id": "google/gemini-x-flash:free", "created": 1_759_000_000},
+        {"id": "google/gemini-x-flash:extended", "created": 1_758_000_000},
+        {"id": "google/gemini-x-flash:nitro", "created": 1_757_000_000},
+    ]
+
+    assert profile.resolve_model(catalog) == "google/gemini-x-flash"
+    # A catalog offering nothing but variants offers this profile no model at all.
+    assert profile.resolve_model([entry for entry in catalog if ":" in entry["id"]]) is None
 
 
 def test_profile_reports_unavailable_when_the_catalog_has_no_match() -> None:

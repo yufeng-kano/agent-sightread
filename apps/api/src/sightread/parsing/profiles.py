@@ -54,16 +54,24 @@ class Profile:
     prompt_template: str
     figure_prompt_template: str
     profile_version: int
-    # Catalog matching: an id must match `model_pattern` and contain none of `excluded_terms`.
+    # Catalog matching: an id must be a base id, match `model_pattern`, and contain none
+    # of `excluded_terms`.
     model_pattern: re.Pattern[str]
     excluded_terms: tuple[str, ...] = field(default=())
 
     def resolve_model(self, catalog: list[dict]) -> str | None:
-        """Newest catalog model this profile recognises, or None when the catalog has none."""
+        """Newest base model this profile recognises, or None when the catalog has none.
+
+        An id with a `:` suffix (`:batch`, `:free`, `:extended`, `:nitro`, ...) is a
+        routing or pricing variant of a base model, not a model of its own, and none of
+        them is ever a candidate: `:batch` is offline batch inference, which would break
+        interactive parsing outright.
+        """
         candidates = [
             model
             for model in catalog
             if isinstance(model.get("id"), str)
+            and ":" not in model["id"]
             and self.model_pattern.search(model["id"])
             and not any(term in model["id"] for term in self.excluded_terms)
         ]
@@ -87,7 +95,7 @@ PRESET_PROFILES: tuple[Profile, ...] = (
         # 2: the phase-1 placeholder wording was replaced by the shipped prompts above.
         profile_version=2,
         model_pattern=re.compile(r"^google/gemini[\w.-]*flash"),
-        excluded_terms=("lite", "thinking", ":free", "-exp"),
+        excluded_terms=("lite", "thinking", "-exp"),
     ),
 )
 
