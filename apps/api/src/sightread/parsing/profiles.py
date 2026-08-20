@@ -16,15 +16,32 @@ from dataclasses import dataclass, field
 BBOX_FORMAT_YXYX = "yxyx_norm1000"
 
 # Part of the dedup cache key; bump when the pipeline changes results (docs/jobs.md).
+# The default templates below are covered by this version, since jobs that run a raw model
+# instead of a preset carry no profile version of their own.
 PIPELINE_VERSION = 1
 
-# Placeholder wording — the phase that implements vision calls owns the final prompt.
-YXYX_PROMPT_TEMPLATE = """Transcribe this page as GitHub-flavoured Markdown.
-For every figure, chart, photo or diagram, emit a placeholder line
-![fig{{n}}](sightread://p{{page}}/{{ymin}},{{xmin}},{{ymax}},{{xmax}}) followed by the
-caption verbatim on the next line.
-Bounding boxes must be [ymin, xmin, ymax, xmax], integers normalized to 0-1000 with the
-origin at the top-left corner of the page image ({bbox_format}).
+# Transcription prompt for a rendered page. `{page}` is the real page number: the model is
+# told what to write so the placeholder it emits already matches our own numbering.
+DEFAULT_PROMPT_TEMPLATE = """Transcribe this page image into GitHub-flavoured Markdown.
+Reproduce the text verbatim and in reading order, keeping headings, lists, tables and
+formulas. Do not summarise, do not comment, and do not wrap your answer in a code fence.
+
+Where a figure, chart, photograph, diagram or map appears, emit a line of the form
+![fig](sightread://p{page}/YMIN,XMIN,YMAX,XMAX)
+at that position, with the figure's caption verbatim on the very next line (an empty line
+when it has none). YMIN, XMIN, YMAX and XMAX are integers in the {bbox_format} coordinate
+space: [ymin, xmin, ymax, xmax] normalized to 0-1000, origin at the top-left corner of
+this page image. Emit no other Markdown images.
+"""
+
+# Figure detection for a page whose text came from the PDF text layer: boxes only.
+DEFAULT_FIGURE_PROMPT_TEMPLATE = """List every figure, chart, photograph, diagram or map
+in this page image. Answer with a JSON array and nothing else — no prose, no code fence.
+
+Each element is {{"bbox": [YMIN, XMIN, YMAX, XMAX], "caption": "..."}}, where the four
+integers are the {bbox_format} coordinate space: [ymin, xmin, ymax, xmax] normalized to
+0-1000, origin at the top-left corner of this page image, and caption is that figure's
+caption copied verbatim, or "" when it has none. Answer [] when there is no figure.
 """
 
 
@@ -35,6 +52,7 @@ class Profile:
     description: str
     bbox_format: str
     prompt_template: str
+    figure_prompt_template: str
     profile_version: int
     # Catalog matching: an id must match `model_pattern` and contain none of `excluded_terms`.
     model_pattern: re.Pattern[str]
@@ -64,8 +82,10 @@ PRESET_PROFILES: tuple[Profile, ...] = (
             "[ymin, xmin, ymax, xmax] boxes normalized to 0-1000."
         ),
         bbox_format=BBOX_FORMAT_YXYX,
-        prompt_template=YXYX_PROMPT_TEMPLATE,
-        profile_version=1,
+        prompt_template=DEFAULT_PROMPT_TEMPLATE,
+        figure_prompt_template=DEFAULT_FIGURE_PROMPT_TEMPLATE,
+        # 2: the phase-1 placeholder wording was replaced by the shipped prompts above.
+        profile_version=2,
         model_pattern=re.compile(r"^google/gemini[\w.-]*flash"),
         excluded_terms=("lite", "thinking", ":free", "-exp"),
     ),

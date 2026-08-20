@@ -13,8 +13,10 @@ types (JSONB and timestamptz) precisely so this fallback stays honest.
 
 from __future__ import annotations
 
+import contextlib
 import os
 from collections.abc import AsyncIterator, Callable
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
@@ -25,6 +27,16 @@ from sightread.config import Settings
 from sightread.db.models import Base
 from sightread.db.session import create_sessionmaker
 from sightread.main import create_app
+from tests.fixtures.documents import (
+    build_corrupt_pdf,
+    build_image,
+    build_mixed_pdf,
+    build_rotated_jpeg,
+    build_scanned_pdf,
+    build_table_pdf,
+    build_text_layer_pdf,
+    build_two_column_pdf,
+)
 
 TEST_SECRET_KEY = "test-secret-key-not-a-real-one"
 CSRF_HEADERS = {"X-Requested-With": "XMLHttpRequest"}
@@ -46,7 +58,7 @@ async def sessionmaker(tmp_path):
 
 
 @pytest_asyncio.fixture
-async def make_client(sessionmaker) -> AsyncIterator[Callable[..., AsyncClient]]:
+async def make_client(sessionmaker, tmp_path) -> AsyncIterator[Callable[..., AsyncClient]]:
     """Build a client for an app with the given settings overrides.
 
     The app's sessionmaker is injected directly, so no lifespan and no live database are
@@ -61,12 +73,15 @@ async def make_client(sessionmaker) -> AsyncIterator[Callable[..., AsyncClient]]
                 "auth_dev_mode": True,
                 "secret_key": TEST_SECRET_KEY,
                 "database_url": "sqlite+aiosqlite://",
+                "upload_dir": str(tmp_path / "uploads"),
                 **overrides,
             }
         )
         app = create_app(settings)
         app.state.sessionmaker = sessionmaker
         client = AsyncClient(transport=ASGITransport(app=app), base_url="https://testserver")
+        # Tests that drive the worker in-process need the same settings the app used.
+        client.app = app
         opened.append(client)
         return client
 
@@ -78,6 +93,29 @@ async def make_client(sessionmaker) -> AsyncIterator[Callable[..., AsyncClient]]
 @pytest.fixture
 def client(make_client) -> AsyncClient:
     return make_client()
+
+
+@pytest.fixture(scope="session")
+def documents(tmp_path_factory) -> dict[str, Path]:
+    """Every fixture document, built once per session (tests/fixtures/documents.py)."""
+    directory = tmp_path_factory.mktemp("documents")
+    built = {
+        "text_pdf": build_text_layer_pdf(directory / "text.pdf"),
+        "scanned_pdf": build_scanned_pdf(directory / "scanned.pdf"),
+        "two_column_pdf": build_two_column_pdf(directory / "two-column.pdf"),
+        "table_pdf": build_table_pdf(directory / "table.pdf"),
+        "mixed_pdf": build_mixed_pdf(directory / "mixed.pdf"),
+        "corrupt_pdf": build_corrupt_pdf(directory / "corrupt.pdf"),
+        "jpg": build_image(directory / "tiny.jpg", "JPEG"),
+        "png": build_image(directory / "tiny.png", "PNG"),
+        "webp": build_image(directory / "tiny.webp", "WEBP"),
+        "rotated_jpg": build_rotated_jpeg(directory / "rotated.jpg"),
+        "wide_png": build_image(directory / "wide.png", "PNG", size=(3000, 1000)),
+    }
+    # Some pillow-heif wheels ship a decoder but no encoder; the HEIC test skips then.
+    with contextlib.suppress(OSError, ValueError, KeyError):
+        built["heic"] = build_image(directory / "tiny.heic", "HEIF")
+    return built
 
 
 @pytest_asyncio.fixture

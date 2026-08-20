@@ -11,7 +11,10 @@ dependencies = [
     "fastapi>=0.121.2",
     "httpx>=0.28.1",
     "itsdangerous>=2.2.0",
+    "pillow>=11",
+    "pillow-heif>=0.21",
     "pydantic-settings>=2.13.1",
+    "python-multipart>=0.0.20",
     "sqlalchemy[asyncio]>=2.0.44",
     "uvicorn[standard]>=0.38.1",
 ]
@@ -21,6 +24,7 @@ dev = [
     "aiosqlite>=0.21.0",
     "pytest>=9.0.1",
     "pytest-asyncio>=1.3.0",
+    "reportlab>=4.2",
     "respx>=0.22.0",
     "ruff>=0.14.6",
 ]
@@ -39,7 +43,16 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC", "S", "C4", "SIM"]
-ignore = ["S101"]
+ignore = [
+    "S101",
+    # ASYNC109: the Poppler wrappers take an explicit per-call timeout because they also
+    # have to kill the child process; that is the timeout policy, not a stand-in for
+    # `asyncio.timeout` (docs/parsing.md).
+    "ASYNC109",
+    # ASYNC240: the pathlib calls inside async code are single metadata operations on
+    # local disk (mkdir, unlink), not the blocking I/O this rule is aimed at.
+    "ASYNC240",
+]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S105", "S106"]
