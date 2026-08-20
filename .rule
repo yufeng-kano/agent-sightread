@@ -1,0 +1,29 @@
+# agent-sightread
+
+Canonical project rules (`.rule`; AGENTS.md / CLAUDE.md symlink here). Guardrails only — `docs/` is the source of truth, start at `docs/index.md`.
+
+## Docs first
+
+- Read the docs matching the task before non-trivial work. Feature/schema/behavior changes: update `docs/` first, then implement; keep `docs/index.md` in sync.
+- If a request conflicts with docs, state the conflict and wait for an explicit override.
+
+## Cost safety — user OpenRouter keys are real money
+
+- Never debug, reproduce, or benchmark against OpenRouter or any paid upstream. Verification is tests with stubbed HTTP (`docs/testing.md`). A live smoke test needs explicit per-instance approval: one tiny document, one cheap model, never a loop.
+
+## Secrets
+
+- Never commit secrets; real values live in `.env` (gitignored), tracked files use placeholders. Never print secret values — only whether one exists.
+- At rest per `docs/auth.md`: hash what we only verify (API keys, sessions, OAuth tokens), AES-GCM what we must replay (OpenRouter key). No credential material in logs or error messages, ever.
+
+## Hard technical rules
+
+- PDF work only via Poppler CLI subprocesses. No PyMuPDF, no linked PDF libraries (AGPL) — `docs/parsing.md`.
+- Queue is PostgreSQL `FOR UPDATE SKIP LOCKED`; no Redis, no broker — `docs/jobs.md`.
+- Uploads stream to disk with size caps, never buffered whole in memory; no `file path` source on hosted endpoints; uploads and SSE never route through the Nuxt server.
+- Schema changes only via Alembic migrations, `docs/database.md` updated first.
+- Python via uv. Code, comments, identifiers in English; UI copy through the i18n catalog (en + zh-TW).
+
+## Real data only
+
+- Frontend renders only what the backend returns; empty is a real state. Models come from OpenRouter's live catalog, usage from `usage_log` — never hard-coded as if live. Exceptions: test fixtures, docs examples with placeholders.
