@@ -1,7 +1,5 @@
-"""FastAPI wiring.
-
-Phase 1 mounts `/api` (control plane) and `/v1` (data plane). `/oauth`, `/mcp` and
-`/.well-known/*` land here as later phases add them.
+"""FastAPI wiring: `/api` (control plane), `/v1` (data plane), `/oauth` plus
+`/.well-known/*` (authorization server) and `/mcp` (MCP shell) — one app, one process.
 """
 
 from __future__ import annotations
@@ -15,7 +13,8 @@ from .auth.oidc import build_oauth
 from .config import Settings, get_settings
 from .db.session import create_engine, create_sessionmaker
 from .errors import install_error_handlers
-from .routes import control, v1
+from .mcp import mcp_session_manager, mount_mcp
+from .routes import control, oauth, v1
 
 # Signed cookie holding only the transient OIDC state/PKCE verifier during a login
 # round trip. The durable credential is the server-side session row.
@@ -33,7 +32,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.engine = engine
         app.state.sessionmaker = create_sessionmaker(engine)
         try:
-            yield
+            # The MCP session manager owns the task group every streamable-HTTP request
+            # runs in, so it lives exactly as long as the app does.
+            async with mcp_session_manager(app):
+                yield
         finally:
             await engine.dispose()
 
@@ -56,6 +58,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     if settings.dev_login_enabled:
         app.include_router(control.dev_router)
     app.include_router(v1.router)
+    app.include_router(oauth.router)
+    mount_mcp(app)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, bool]:

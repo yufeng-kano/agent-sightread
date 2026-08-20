@@ -27,6 +27,7 @@ from sightread.config import Settings
 from sightread.db.models import Base
 from sightread.db.session import create_sessionmaker
 from sightread.main import create_app
+from sightread.mcp import mcp_session_manager
 from tests.fixtures.documents import (
     build_corrupt_pdf,
     build_image,
@@ -123,3 +124,12 @@ async def signed_in(client: AsyncClient) -> AsyncClient:
     response = await client.post("/api/auth/dev-login", headers=CSRF_HEADERS)
     assert response.status_code == 200
     return client
+
+
+def mcp_running(client: AsyncClient):
+    """Run the MCP session manager around a block of requests.
+
+    The app starts it in its lifespan, which `ASGITransport` never runs, so a test that
+    touches `/mcp` enters it explicitly.
+    """
+    return mcp_session_manager(client.app)
