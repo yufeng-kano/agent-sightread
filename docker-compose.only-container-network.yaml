@@ -1,0 +1,28 @@
+# Overlay for hosts where something else already owns :443 (docs/deployment.md).
+# Merged onto the production file, never used alone:
+#
+#   docker compose -f docker-compose.production.yaml \
+#                  -f docker-compose.only-container-network.yaml up -d
+#
+# The stack then publishes no host port at all. Caddy still listens on 443 inside the
+# container, still runs ACME and still owns its certificate -- so the front router must
+# pass TLS through untouched (SNI routing on raw TCP). Terminating TLS upstream breaks
+# this stack's ACME and is not supported.
+
+services:
+  caddy:
+    # Give up the host ports. Plain merging would append to the production list, so the
+    # base value has to be reset explicitly.
+    ports: !reset []
+    networks:
+      # api, worker and pg stay here only, unreachable from the shared network.
+      default:
+      proxy:
+        # Prefixed on purpose: a bare `caddy` alias collides with every other stack
+        # sharing this network.
+        aliases:
+          - sightread-caddy
+
+networks:
+  proxy:
+    external: true

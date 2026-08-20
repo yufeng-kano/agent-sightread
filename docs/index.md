@@ -15,7 +15,7 @@ Hosted, multi-user **vision document parsing** service. Users sign in with Googl
 | [mcp.md](./mcp.md) | MCP server as thin shell over REST, streamable HTTP, Claude Connectors flow |
 | [web.md](./web.md) | Nuxt control plane: pages, i18n, design restraint |
 | [project-structure.md](./project-structure.md) | Monorepo layout and module boundaries |
-| [deployment.md](./deployment.md) | docker-compose (local + production), Caddy, TLS, env vars |
+| [deployment.md](./deployment.md) | docker-compose (local, production, and an overlay for hosts with a front proxy), Caddy, TLS, env vars |
 | [testing.md](./testing.md) | Test strategy, cost-safety rules, commands |
 
 ## Stack (fixed)

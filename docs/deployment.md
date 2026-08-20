@@ -2,9 +2,12 @@
 
 Single server, docker-compose, Caddy in front. Environments: **local** and **production** only. Production host/DNS specifics stay out of tracked files (use `.local/` notes if needed; this repo is public).
 
-## Two standalone compose files (no override merging)
+## Compose files
 
-Compose `-f` merge semantics surprise people; each file is complete and readable on its own.
+Compose `-f` merge semantics surprise people, so the two *full stacks* are standalone: each is
+complete and readable on its own and is never merged with the other. The single exception is
+`docker-compose.only-container-network.yaml`, which is an overlay **by design** — it is meaningless
+on its own and exists precisely to be merged onto the production file.
 
 ### `docker-compose.yaml` — local
 
@@ -21,10 +24,36 @@ Compose `-f` merge semantics surprise people; each file is complete and readable
 - Backups: a `backup` service (the `postgres:16` image) loops `pg_dump --format=custom` once a day into `./backups` (mounted, gitignored) and keeps the newest seven dumps. The schedule and the rotation are a visible shell loop in the compose file on purpose. Restore is `pg_restore -d sightread <dump>`; test it before launch. Leaving managed platforms means backups are ours now.
 - `POSTGRES_PASSWORD` has no default here: the stack refuses to start without one. Migrations run from the `api` container's start command (`alembic upgrade head`), so the worker waits on the api.
 
+### `docker-compose.only-container-network.yaml` — production behind a front proxy
+
+For hosts where something else already owns `:443` — typically an SNI router fronting several
+unrelated stacks. Merged onto the production file:
+
+```bash
+docker compose -f docker-compose.production.yaml -f docker-compose.only-container-network.yaml up -d
+```
+
+- Drops Caddy's published ports (`ports: !reset []`) so the whole stack claims **no host port at
+  all**; Caddy still listens on 443 *inside* the container. `!reset` on `ports` needs a recent
+  Compose (verified on 2.40.1).
+- Joins Caddy to the external network `proxy` with the alias `sightread-caddy` — that alias is how
+  the front router reaches it, and it is prefixed because `caddy` alone would collide with every
+  other stack on a shared network. Create the network once: `docker network create proxy`. `api`,
+  `worker` and `pg` stay on the default network and remain unreachable from it.
+- **Caddy still terminates TLS and still owns its certificate.** The front router must do SNI
+  passthrough (raw TCP, no TLS termination). Terminating TLS upstream is not supported here: it
+  breaks this stack's ACME, and the certificate is deliberately the service's own responsibility.
+- Port 80 is not published either, so the HTTP-01 challenge cannot reach Caddy. The Caddyfile
+  disables it and validates with TLS-ALPN-01 (RFC 8737) over the 443 that is passed through, so the
+  front router only has to forward 443.
+- The overlay carries no host-specific values — the domain still comes from `DOMAIN` in `.env`.
+  It is tracked on purpose: anyone fronting this stack with their own proxy needs it.
+
 ## Caddy routing (`deploy/caddy/Caddyfile`)
 
 ```text
 <domain> {
+  tls { issuer acme { disable_http_challenge } }   # validate over 443 (TLS-ALPN-01), never :80
   request_body { max_size 128MB }        # keep in sync with UPLOAD_MAX_BYTES
   @api path /v1/* /api/* /oauth/* /mcp /mcp/* /.well-known/*
   handle @api { reverse_proxy api:8000 }
@@ -34,9 +63,11 @@ Compose `-f` merge semantics surprise people; each file is complete and readable
 
 Uploads and SSE go straight through Caddy to FastAPI — never through the Nuxt/Node server. Disable proxy buffering for SSE routes; long-lived connections need generous idle timeouts.
 
-As built: the domain comes from `{$DOMAIN}` and the ACME contact from `{$ACME_EMAIL}` (both in `.env`, passed to the caddy service), the API proxy sets `flush_interval -1` (no response buffering, for SSE and MCP streams) and 30-minute read/write timeouts. The ACME HTTP challenge also lives under `/.well-known/`, but Caddy answers it itself on :80 before these routes are consulted.
+As built: the domain comes from `{$DOMAIN}` and the ACME contact from `{$ACME_EMAIL}` (both in `.env`, passed to the caddy service), the API proxy sets `flush_interval -1` (no response buffering, for SSE and MCP streams) and 30-minute read/write timeouts.
 
-## Environment variables (`.env.example` is the authoritative list)
+Certificates are always this stack's own: the site block carries an explicit `tls { issuer acme { disable_http_challenge } }`, so validation is TLS-ALPN-01 over 443 and never HTTP-01 over 80. That holds for both deployments — standalone, where Caddy publishes 80 and 443 itself, and behind a front proxy, where only a passed-through 443 reaches it. Port 80 is therefore only ever an HTTP→HTTPS convenience, never a dependency.
+
+## Environment variables (`.env.example` / `.env.production.example` are the authoritative lists)
 
 | Var | Notes |
 |-----|-------|
@@ -45,12 +76,17 @@ As built: the domain comes from `{$DOMAIN}` and the ACME contact from `{$ACME_EM
 | `DATABASE_URL` | `postgresql+asyncpg://...` |
 | `SECRET_KEY` | sessions + HKDF root for OpenRouter-key encryption; generate long random |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | OIDC |
-| `AUTH_DEV_MODE` | local only |
+| `AUTH_DEV_MODE` | local only; absent from `.env.production.example` |
 | `UPLOAD_MAX_BYTES`, `PAGE_CAP`, `MAX_JOBS_PER_USER`, `VISION_CONCURRENCY_PER_JOB`, `RENDER_WORKERS` | defaults in [api.md](./api.md) / [jobs.md](./jobs.md) |
 | `UPLOAD_DIR` | `/data/uploads` in containers |
 | `PG_PORT` | local compose only: host port for `pg` (default 5432); change it when that port is taken |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | the `pg` container's credentials; the password is required in production |
 | `DOMAIN` / `ACME_EMAIL` | production only: the host Caddy serves, and the Let's Encrypt contact address |
+
+Two standalone example files, same reasoning as the compose files: `.env.example` is local,
+`.env.production.example` is production, and neither is a diff against the other. Deploying means
+copying the production one and filling it in — never carrying the local `.env` to a server.
+`AUTH_DEV_MODE` deliberately does not appear in the production example at all.
 
 Secrets live in `.env` (gitignored) on the server; tracked files carry placeholders only. Never print secret values — only whether one exists.
 
@@ -58,4 +94,6 @@ Google OAuth client (production): the authorized redirect URI is `https://<domai
 
 ## Release flow (initial)
 
-`git pull && docker compose -f docker-compose.production.yaml up -d --build` on the server. Tagged releases/CI can come later; keep root `package.json` version bumped per SemVer when tagging starts.
+`git pull && docker compose -f docker-compose.production.yaml up -d --build` on the server (append
+`-f docker-compose.only-container-network.yaml` on hosts with a front proxy — and keep appending it,
+since leaving it off republishes 80/443 and collides with whatever owns them). Tagged releases/CI can come later; keep root `package.json` version bumped per SemVer when tagging starts.
