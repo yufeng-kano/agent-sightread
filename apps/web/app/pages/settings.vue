@@ -32,20 +32,41 @@ const keyError = ref<string | null>(null)
 const keyMessage = ref<string | null>(null)
 const confirmingDelete = ref(false)
 
-const defaultModel = ref('')
-const defaultProfile = ref('')
+/**
+ * One choice, not two: a parsing default is a model *and* the format it is prompted for,
+ * so the dropdown lists preset profiles (which pair them) plus at most one custom model.
+ * Encoded as `profile:<id>` / `model:<id>` / '' so the `<select>` can carry either kind.
+ */
+const selection = ref('')
+/** The custom entry the dropdown shows — the stored default, or one just picked. */
+const customModel = ref<string | null>(null)
 const defaultsPending = ref(false)
 const defaultsError = ref<string | null>(null)
 const defaultsMessage = ref<string | null>(null)
 
+const addingCustom = ref(false)
+const customChoice = ref('')
+
 watch(
   () => auth.me.value?.settings,
   (settings) => {
-    defaultModel.value = settings?.default_model ?? ''
-    defaultProfile.value = settings?.default_profile ?? ''
+    const profile = settings?.default_profile
+    const model = settings?.default_model
+    selection.value = profile ? `profile:${profile}` : model ? `model:${model}` : ''
+    if (model) {
+      customModel.value = model
+    }
   },
   { immediate: true },
 )
+
+const customOptionLabel = computed(() => {
+  if (!customModel.value) {
+    return ''
+  }
+  const entry = catalog.value?.models.find((model) => model.id === customModel.value)
+  return entry ? modelLabel(entry) : customModel.value
+})
 
 async function saveOpenRouterKey() {
   const candidate = keyInput.value.trim()
@@ -82,22 +103,42 @@ async function removeOpenRouterKey() {
   }
 }
 
-async function saveDefaults() {
+/** Saves on selection, reverting the dropdown when the server refuses — a picker whose
+    display disagrees with the stored default would be lying. */
+async function applySelection(value: string) {
+  const previous = selection.value
+  selection.value = value
   defaultsPending.value = true
   defaultsError.value = null
   defaultsMessage.value = null
   try {
     await putSettings({
-      default_model: defaultModel.value || null,
-      default_profile: defaultProfile.value || null,
+      default_model: value.startsWith('model:') ? value.slice('model:'.length) : null,
+      default_profile: value.startsWith('profile:') ? value.slice('profile:'.length) : null,
     })
     defaultsMessage.value = t('settings.saved')
     await auth.refresh()
   } catch (error) {
+    selection.value = previous
     defaultsError.value = await resolve(error)
   } finally {
     defaultsPending.value = false
   }
+}
+
+function openCustom() {
+  customChoice.value = customModel.value ?? ''
+  addingCustom.value = true
+}
+
+async function submitCustom() {
+  const choice = customChoice.value
+  if (!choice || defaultsPending.value) {
+    return
+  }
+  customModel.value = choice
+  addingCustom.value = false
+  await applySelection(`model:${choice}`)
 }
 </script>
 
@@ -108,9 +149,8 @@ async function saveDefaults() {
     <div class="stack">
       <UiCard :title="t('settings.openrouterTitle')">
         <div class="section">
-          <!-- The stored state, in the tone it deserves: a missing key is why parsing would
-               fail, so it is written in the warning tone rather than boxed in a banner that
-               would still be there after the user fixed it. -->
+          <!-- Only the stored state is worth a line. Absence explains itself: the field is
+               empty and asks to be filled. -->
           <p v-if="openrouterKey?.present && openrouterKey.updated_at" class="state">
             {{
               t('settings.openrouterStored', {
@@ -119,7 +159,6 @@ async function saveDefaults() {
               })
             }}
           </p>
-          <p v-else class="state missing">{{ t('settings.openrouterMissing') }}</p>
 
           <form class="control-row" @submit.prevent="saveOpenRouterKey">
             <UiField v-slot="{ id }" class="grow" :label="t('settings.openrouterLabel')">
@@ -162,51 +201,83 @@ async function saveDefaults() {
           <UiBanner v-if="catalogError" tone="error">{{ catalogError }}</UiBanner>
           <UiSkeleton v-else-if="!catalog" :rows="2" />
 
-          <form v-else class="control-row" @submit.prevent="saveDefaults">
-            <UiField v-slot="{ id }" class="grow" :label="t('settings.defaultModel')">
-              <UiSelect :id="id" v-model="defaultModel">
+          <!-- One dropdown, saved as it changes: each recommended entry is a model *and*
+               the bbox format it is prompted for; "custom" is any image-input model on the
+               default prompts. -->
+          <div v-else class="control-row">
+            <UiField v-slot="{ id }" class="grow" :label="t('settings.defaultLabel')">
+              <UiSelect
+                :id="id"
+                :model-value="selection"
+                :disabled="defaultsPending"
+                @update:model-value="applySelection"
+              >
                 <option value="">{{ t('common.notSet') }}</option>
-                <optgroup v-if="recommendedModels.length" :label="t('settings.recommendedGroup')">
-                  <option v-for="model in recommendedModels" :key="model.id" :value="model.id">
-                    {{ modelLabel(model) }}
+                <optgroup :label="t('settings.recommendedGroup')">
+                  <option
+                    v-for="profile in catalog.profiles"
+                    :key="profile.id"
+                    :value="`profile:${profile.id}`"
+                    :disabled="!profile.available"
+                  >
+                    {{
+                      profile.available
+                        ? `${profile.name} · ${profile.model}`
+                        : t('settings.profileUnavailable', { name: profile.name })
+                    }}
                   </option>
                 </optgroup>
-                <optgroup v-if="otherModels.length" :label="t('settings.otherModelsGroup')">
-                  <option v-for="model in otherModels" :key="model.id" :value="model.id">
-                    {{ modelLabel(model) }}
-                  </option>
+                <optgroup v-if="customModel" :label="t('settings.customGroup')">
+                  <option :value="`model:${customModel}`">{{ customOptionLabel }}</option>
                 </optgroup>
               </UiSelect>
             </UiField>
 
-            <UiField v-slot="{ id }" class="grow" :label="t('settings.defaultProfile')">
-              <UiSelect :id="id" v-model="defaultProfile">
-                <option value="">{{ t('common.notSet') }}</option>
-                <option
-                  v-for="profile in catalog.profiles"
-                  :key="profile.id"
-                  :value="profile.id"
-                  :disabled="!profile.available"
-                >
-                  {{
-                    profile.available
-                      ? profile.name
-                      : t('settings.profileUnavailable', { name: profile.name })
-                  }}
-                </option>
-              </UiSelect>
-            </UiField>
-
-            <UiButton variant="primary" type="submit" :loading="defaultsPending">
-              {{ t('common.save') }}
+            <UiButton :disabled="defaultsPending" @click="openCustom">
+              <template #icon><UiIcon name="plus" /></template>
+              {{ t('settings.addCustom') }}
             </UiButton>
-          </form>
+          </div>
 
           <UiBanner v-if="defaultsError" tone="error">{{ defaultsError }}</UiBanner>
           <UiBanner v-else-if="defaultsMessage" tone="ok">{{ defaultsMessage }}</UiBanner>
         </div>
       </UiCard>
     </div>
+
+    <UiModal v-if="addingCustom" :title="t('settings.customTitle')" @close="addingCustom = false">
+      <form id="custom-model" class="custom-form" @submit.prevent="submitCustom">
+        <UiField v-slot="{ id }" :label="t('settings.customModelLabel')">
+          <UiSelect :id="id" v-model="customChoice">
+            <option value="" disabled>{{ t('common.notSet') }}</option>
+            <optgroup v-if="recommendedModels.length" :label="t('settings.recommendedGroup')">
+              <option v-for="model in recommendedModels" :key="model.id" :value="model.id">
+                {{ modelLabel(model) }}
+              </option>
+            </optgroup>
+            <optgroup v-if="otherModels.length" :label="t('settings.otherModelsGroup')">
+              <option v-for="model in otherModels" :key="model.id" :value="model.id">
+                {{ modelLabel(model) }}
+              </option>
+            </optgroup>
+          </UiSelect>
+        </UiField>
+        <p class="custom-note">{{ t('settings.customNote') }}</p>
+      </form>
+      <template #footer>
+        <UiButton variant="ghost" :disabled="defaultsPending" @click="addingCustom = false">
+          {{ t('common.cancel') }}
+        </UiButton>
+        <UiButton
+          variant="primary"
+          type="submit"
+          form="custom-model"
+          :disabled="!customChoice"
+        >
+          {{ t('settings.customUse') }}
+        </UiButton>
+      </template>
+    </UiModal>
 
     <UiConfirmDialog
       v-if="confirmingDelete"
@@ -247,8 +318,15 @@ async function saveDefaults() {
   max-width: 72ch;
 }
 
-.state.missing {
-  color: var(--warn);
+.custom-form {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.custom-note {
+  color: var(--muted);
+  font-size: var(--text-sm);
+  max-width: 60ch;
 }
 
 /*

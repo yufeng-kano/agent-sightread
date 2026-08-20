@@ -97,6 +97,20 @@ PRESET_PROFILES: tuple[Profile, ...] = (
         model_pattern=re.compile(r"^google/gemini[\w.-]*flash"),
         excluded_terms=("lite", "thinking", "-exp"),
     ),
+    Profile(
+        id="qwen-yxyx",
+        name="Qwen VL (yxyx)",
+        description=(
+            "Current Qwen VL vision model, prompted for the same "
+            "[ymin, xmin, ymax, xmax] boxes normalized to 0-1000."
+        ),
+        bbox_format=BBOX_FORMAT_YXYX,
+        prompt_template=DEFAULT_PROMPT_TEMPLATE,
+        figure_prompt_template=DEFAULT_FIGURE_PROMPT_TEMPLATE,
+        profile_version=1,
+        model_pattern=re.compile(r"^qwen/qwen[\w.-]*-vl"),
+        excluded_terms=("thinking",),
+    ),
 )
 
 

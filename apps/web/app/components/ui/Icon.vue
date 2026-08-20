@@ -3,16 +3,30 @@
  * The app's glyphs, inlined.
  *
  * One 16px stroked set on a 16px grid (1.4 stroke, round caps and joins) so a Refresh in a
- * page header and a Copy in a table row read as one family. Inline rather than an icon
- * package: eight glyphs do not justify a dependency, and a remote sprite would be a
- * render-blocking request for chrome that must paint immediately.
+ * page header, a Copy in a table row, and a destination in the sidebar read as one family.
+ * Inline rather than an icon package: a dozen glyphs do not justify a dependency, and a
+ * remote sprite would be a render-blocking request for chrome that must paint immediately.
  *
  * Always decorative. An icon-only control carries its name in `UiButton`'s `label` (which
- * becomes both the accessible name and the tooltip), never in the glyph — so this is
- * unconditionally `aria-hidden`.
+ * becomes both the accessible name and the tooltip) and a nav item in the word beside it,
+ * never in the glyph — so this is unconditionally `aria-hidden`.
  */
 defineProps<{
-  name: 'refresh' | 'copy' | 'check' | 'plus' | 'trash' | 'expand' | 'close' | 'sign-out'
+  name:
+    | 'refresh'
+    | 'copy'
+    | 'check'
+    | 'plus'
+    | 'trash'
+    | 'expand'
+    | 'close'
+    | 'sign-out'
+    | 'menu'
+    | 'dashboard'
+    | 'keys'
+    | 'jobs'
+    | 'connect'
+    | 'settings'
 }>()
 </script>
 
@@ -72,6 +86,44 @@ defineProps<{
       <path d="M6.25 13.5H3.75A1.25 1.25 0 012.5 12.25v-8.5A1.25 1.25 0 013.75 2.5h2.5" />
       <path d="M10.5 10.75L13.25 8l-2.75-2.75" />
       <path d="M13.25 8H6.25" />
+    </template>
+
+    <!-- Menu: opens the sidebar drawer below the shell breakpoint. -->
+    <template v-else-if="name === 'menu'">
+      <path d="M2 4h12M2 8h12M2 12h12" />
+    </template>
+
+    <!-- Dashboard: bars on a baseline — the page is cost and tokens over time. -->
+    <template v-else-if="name === 'dashboard'">
+      <path d="M2 13.5h12" />
+      <path d="M4.25 13.5V8M8 13.5V3.5M11.75 13.5V6.25" />
+    </template>
+
+    <!-- Keys: a key, bit end first. -->
+    <template v-else-if="name === 'keys'">
+      <circle cx="5.25" cy="10.75" r="2.75" />
+      <path d="M7.25 8.75L13 3M11 5l1.5 1.5M9.5 6.5L11 8" />
+    </template>
+
+    <!-- Jobs: a run of entries, each a marker beside its line. -->
+    <template v-else-if="name === 'jobs'">
+      <path d="M2.75 4h1.5M2.75 8h1.5M2.75 12h1.5" />
+      <path d="M6.75 4h6.5M6.75 8h6.5M6.75 12h4" />
+    </template>
+
+    <!-- Connect: a plug, prongs up — the connector page. -->
+    <template v-else-if="name === 'connect'">
+      <path d="M5.5 2v3M10.5 2v3" />
+      <path d="M3.75 5h8.5v2a4.25 4.25 0 01-8.5 0V5z" />
+      <path d="M8 11.25V14" />
+    </template>
+
+    <!-- Settings: sliders rather than a gear — a gear's teeth turn to mush at 16px. -->
+    <template v-else-if="name === 'settings'">
+      <path d="M2.5 5.5h3.5M10 5.5h3.5" />
+      <circle cx="8" cy="5.5" r="1.75" />
+      <path d="M2.5 10.5h1.25M7.5 10.5h6" />
+      <circle cx="5.5" cy="10.5" r="1.75" />
     </template>
 
     <!-- Check: the confirmation a copy swaps to. -->

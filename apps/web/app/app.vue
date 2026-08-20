@@ -9,8 +9,8 @@ useHead(() => ({
 </script>
 
 <template>
-  <!-- Two shells: `layouts/default` is the signed-in fixed frame, `layouts/public` the
-       landing's scrolling document (docs/web.md § Pages). -->
+  <!-- One shell: `layouts/default` is the signed-in fixed frame. The sign-in page is
+       full-bleed and opts out with `layout: false` (docs/web.md § Design system). -->
   <NuxtLayout>
     <NuxtPage />
   </NuxtLayout>

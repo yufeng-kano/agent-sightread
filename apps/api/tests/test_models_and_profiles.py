@@ -50,6 +50,19 @@ CATALOG = {
             "architecture": {"input_modalities": ["text", "image"]},
         },
         {
+            "id": "qwen/qwen3-vl-235b-a22b-instruct",
+            "name": "Qwen3 VL 235B Instruct",
+            "created": 1_752_000_000,
+            "architecture": {"input_modalities": ["text", "image"]},
+        },
+        {
+            # A reasoning variant of the same family: excluded from the Qwen preset.
+            "id": "qwen/qwen3-vl-235b-a22b-thinking",
+            "name": "Qwen3 VL 235B Thinking",
+            "created": 1_753_000_000,
+            "architecture": {"input_modalities": ["text", "image"]},
+        },
+        {
             "id": "openai/text-only",
             "name": "Text Only",
             "created": 1_748_000_000,
@@ -85,11 +98,13 @@ async def test_models_are_filtered_to_image_input(signed_in: AsyncClient) -> Non
         "google/gemini-2.5-flash-lite",
         "google/gemini-3.7-flash:batch",
         "anthropic/claude-vision",
+        "qwen/qwen3-vl-235b-a22b-instruct",
+        "qwen/qwen3-vl-235b-a22b-thinking",
     ]
     # The catalog still lists every image-input model, variants included; only the base
-    # id a preset resolves to is flagged.
+    # ids the presets resolve to are flagged.
     recommended = [model["id"] for model in models if model["recommended"]]
-    assert recommended == ["google/gemini-2.5-flash"]
+    assert recommended == ["google/gemini-2.5-flash", "qwen/qwen3-vl-235b-a22b-instruct"]
 
 
 @respx.mock
@@ -109,11 +124,17 @@ async def test_profiles_resolve_a_live_model(signed_in: AsyncClient) -> None:
 
     response = await signed_in.get("/v1/profiles")
     assert response.status_code == 200
-    profile = response.json()["data"][0]
-    assert profile["id"] == "gemini-yxyx"
-    assert profile["model"] == "google/gemini-2.5-flash"
-    assert profile["bbox_format"] == "yxyx_norm1000"
-    assert profile["available"] is True
+    profiles = response.json()["data"]
+
+    gemini, qwen = profiles
+    assert gemini["id"] == "gemini-yxyx"
+    assert gemini["model"] == "google/gemini-2.5-flash"
+    assert gemini["bbox_format"] == "yxyx_norm1000"
+    assert gemini["available"] is True
+    # The thinking variant is newer but excluded; the preset lands on the instruct model.
+    assert qwen["id"] == "qwen-yxyx"
+    assert qwen["model"] == "qwen/qwen3-vl-235b-a22b-instruct"
+    assert qwen["available"] is True
 
 
 def test_profile_never_resolves_to_a_variant_suffix() -> None:

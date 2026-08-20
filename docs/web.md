@@ -10,23 +10,24 @@ Nuxt (latest stable) + TypeScript + `@nuxtjs/i18n` (en, zh-TW; en is the source 
 
 | Page | Rendering | Content |
 |------|-----------|---------|
-| `/` landing | **prerendered, public** (en + `/zh-TW`, hreflang) — the SEO surface: meta tags, OG. Sitemap deferred: needs the public origin (`i18n.baseUrl`), configure when a host exists | what the service is, how the API/connector works, link to sign in |
+| `/` sign-in | **prerendered, public** (en + `/zh-TW`, hreflang) — still the SEO surface: meta tags, OG. Sitemap deferred: needs the public origin (`i18n.baseUrl`), configure when a host exists | kano-proxy-style login page: dark brand panel (dark in both themes) with the mark and a one-line pitch; sign-in panel with the Google button (official mark + prescribed colors) and, when available, the dev sign-in. No marketing copy, no API how-to — curl/MCP instructions live on `/keys`. A signed-in visitor is redirected to `/dashboard` (which is how the OAuth callback's redirect to `web_url` lands in the app) |
 | `/dashboard` | client-side, authed | usage: cost + tokens per day and per model (`GET /api/usage`) |
-| `/keys` | client-side, authed | API key list/create/revoke; plaintext shown once; MCP endpoint URL + "add to Claude" instructions |
-| `/settings` | client-side, authed | OpenRouter key (masked, save validates upstream), default model (from `GET /v1/models`, recommended profiles first), default profile |
+| `/keys` | client-side, authed | API key list/create/revoke; plaintext shown once; REST usage (curl with `Authorization: Bearer`) |
+| `/connect` | client-side, authed | Claude MCP connector: endpoint URL + the one sentence that matters (OAuth, no key to paste) |
+| `/settings` | client-side, authed | OpenRouter key (masked, save validates upstream); parsing default as **one** dropdown of preset profiles (model + bbox format pairs from `GET /v1/profiles`) plus an "add custom model" dialog picking any image-input model from `GET /v1/models` (runs default prompts, `profile: null`); selection saves on change |
 | `/jobs` | client-side, authed | parse history: filename, status, model, pages, expandable raw result JSON (per-job cost not exposed yet — usage aggregates only) |
 
 ## Design system (as built)
 
 - Tokens in `app/assets/css/main.css`, ported from kano-proxy's zinc system: surface ramp, three-step secondary text, monochrome accent inverting between themes, status colors with paired `-bg`/`-border`, spacing/radius/type/motion scales. Every color is defined in both `:root` theme blocks; nothing outside them names a color. One `--control-height` drives Button/TextInput/Select (40px on coarse pointers).
-- Two layouts: `public` (landing — own scrolling shell, shares tokens only) and the signed-in fixed frame (top bar with nav/locale/sign-out — a deliberate divergence from kano-proxy's sidebar: four destinations don't earn one) where only the content region scrolls.
+- One layout, `default`: the signed-in fixed frame following kano-proxy's AppShell — a left sidebar (brand head, icon+label nav for dashboard/jobs/keys/connect/settings, foot with an account row: avatar initial + name opening a popover with the language links and sign-out), a fixed grid where only the content region scrolls, and below 1080px the sidebar becomes a focus-trapped drawer behind a header menu button. The sign-in page is full-bleed two-column and owns its own frame (`layout: false`), sharing tokens only; the locale switch component appears only there.
 - Shared primitives live in `app/components/ui/`: DataTable (the only table markup, sticky headers, <768px card fallback), Modal, Button, TextInput, Select, CopyField, UsageBar, status dot+word. Icon-only controls carry `label` (= aria-label + tooltip); destructive actions keep their visible word.
 - Cards bound scroll regions; never page skeleton, never nested. Empty states say what would be here. A failed refresh keeps its data.
 
 ## Rules
 
-- Auth state via `GET /api/me`; unauthenticated → landing. Login is a plain link to `/api/auth/login` (server redirect flow, no client OAuth).
+- Auth state via `GET /api/me`; unauthenticated → sign-in page; signed-in on `/` → `/dashboard` (locale-aware, client-side). Login is a plain link to `/api/auth/login` (server redirect flow, no client OAuth).
 - The web app calls only `/api/*` (+ `GET /v1/models`, `GET /v1/profiles` which are safe reads). Session cookie, `credentials: include`, custom `X-Requested-With` header on mutations (CSRF pairing with SameSite=Lax).
 - Frontend renders only what the backend returns — empty states are real states, never fabricated sample data.
-- Uploads never pass through Nuxt/Node — there is no upload UI; docs on the landing page point at `curl`/connector usage instead.
+- Uploads never pass through Nuxt/Node — there is no upload UI; `curl`/connector instructions live on `/keys`.
 - i18n: every user-visible string goes through the catalog; en and zh-TW ship together.

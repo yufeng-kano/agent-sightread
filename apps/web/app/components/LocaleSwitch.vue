@@ -1,11 +1,11 @@
 <script setup lang="ts">
 /**
- * Language choice, in both shells.
+ * Language choice: the sidebar foot when signed in, the sign-in page's footer when not.
  *
  * Each option is written in its own language, so it is legible whichever catalog is
  * currently loaded — a translated list would name 繁體中文 "Chinese" to someone who cannot
  * read the rest of the page. They stay real links (the locale lives in the URL), so the
- * choice is bookmarkable and works without JavaScript on the prerendered landing.
+ * choice is bookmarkable and works without JavaScript on the prerendered sign-in page.
  */
 const { t, locale, locales } = useI18n()
 const switchLocalePath = useSwitchLocalePath()

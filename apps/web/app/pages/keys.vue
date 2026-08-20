@@ -20,11 +20,18 @@ const createdKey = ref<CreatedApiKey | null>(null)
 const revokeTarget = ref<ApiKeySummary | null>(null)
 const revoking = ref(false)
 
-// The connector URL is this deployment's own origin; Caddy routes /mcp to the API.
-const mcpUrl = ref('https://<host>/mcp')
+// The example's origin is this deployment's own; a placeholder until the client knows it.
+const origin = ref('https://<host>')
 onMounted(() => {
-  mcpUrl.value = `${window.location.origin}/mcp`
+  origin.value = window.location.origin
 })
+
+const curlExample = computed(
+  () =>
+    `curl -X POST ${origin.value}/v1/parse \\\n` +
+    `  -H "Authorization: Bearer sr_your_api_key" \\\n` +
+    `  -F file=@document.pdf`,
+)
 
 const columns = computed<TableColumn<ApiKeySummary>[]>(() => [
   { key: 'name', header: t('keys.columnName') },
@@ -181,12 +188,13 @@ async function confirmRevoke() {
         </UiDataTable>
       </UiCard>
 
-      <UiCard :title="t('keys.mcpTitle')">
-        <div class="connect">
-          <UiCopyField :value="mcpUrl" />
-          <p class="connect-note">{{ t('keys.mcpBody') }}</p>
-          <p class="connect-note">{{ t('keys.usageNote') }}</p>
-        </div>
+      <!-- The keys' one consumer worth showing here: the REST call they authorize. The
+           example carries the header, so no sentence restates it. -->
+      <UiCard :title="t('keys.restTitle')">
+        <template #actions>
+          <UiCopyButton :text="curlExample" />
+        </template>
+        <pre class="code mono">{{ curlExample }}</pre>
       </UiCard>
     </div>
 
@@ -260,15 +268,14 @@ async function confirmRevoke() {
   color: var(--faint);
 }
 
-.connect {
-  display: grid;
-  gap: var(--space-3);
-}
-
-.connect-note {
-  color: var(--muted);
+/* A command line must not be re-wrapped into something that no longer runs: it scrolls in
+   its own box rather than growing the page sideways. */
+.code {
+  margin: 0;
+  overflow-x: auto;
+  color: var(--text-secondary);
   font-size: var(--text-sm);
-  max-width: 72ch;
-  overflow-wrap: anywhere;
+  line-height: 1.7;
+  white-space: pre;
 }
 </style>

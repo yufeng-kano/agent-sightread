@@ -28,7 +28,7 @@ Unreadable page → entry in `errors`, parsing continues. Whole document unreada
 
 ## Profiles
 
-A profile = model id + coordinate prompt template + response parser + `bbox_format` + profile version. Presets ship in code (e.g. `gemini-yxyx` targeting current Gemini flash-tier vision models — resolve actual ids from the live `/v1/models` catalog at startup, never hard-code a dead id). Users may instead pick **any** image-input model: it runs with the default prompt template, is labeled untested, and bbox quality is explicitly their responsibility. Such a job stores `profile: null` and `profile_version: 0`, so a change to the default templates is covered by `PIPELINE_VERSION` instead.
+A profile = model id + coordinate prompt template + response parser + `bbox_format` + profile version. Presets ship in code (`gemini-yxyx` targeting current Gemini flash-tier vision models, `qwen-yxyx` targeting current Qwen VL models; both prompt the same `yxyx_norm1000` contract — resolve actual ids from the live `/v1/models` catalog at startup, never hard-code a dead id). Users may instead pick **any** image-input model: it runs with the default prompt template, is labeled untested, and bbox quality is explicitly their responsibility. Such a job stores `profile: null` and `profile_version: 0`, so a change to the default templates is covered by `PIPELINE_VERSION` instead.
 
 `profile_version` and global `PIPELINE_VERSION` are part of the dedup cache key ([jobs.md](./jobs.md)) so prompt/pipeline improvements invalidate old cached results.
 

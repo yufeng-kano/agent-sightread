@@ -87,7 +87,7 @@
   /* --- Type ---------------------------------------------------------------
      A dense-UI scale: 11px is the smallest thing that ships (uppercase table headers and
      badges only), 13px is table body, 14px is app body, and the display sizes are reserved
-     for stat values, page titles, and the landing hero. */
+     for stat values, page titles, and the sign-in page's pitch. */
   --text-2xs: 11px;
   --text-xs: 12px;
   --text-sm: 13px;
@@ -123,9 +123,12 @@
      same box, and per-control padding is what makes those drift apart. */
   --control-height: 34px;
   --header-height: 56px;
+  /* The signed-in sidebar's column, and the same value the drawer takes below the shell
+     breakpoint — one number so the two can never disagree. */
+  --sidebar-width: 248px;
   /* Caps the content column so a table does not stretch across an ultrawide display. Sized
-     to use a laptop width, not to a reading measure — the landing caps itself at a real
-     measure instead. */
+     to use a laptop width, not to a reading measure — the sign-in page is full-bleed and
+     sets its own measures. */
   --content-max: 1280px;
   /* How tall a card's list may grow before it scrolls inside the card instead of taking the
      page with it — so a page that stacks two collections bounds each of them. */
