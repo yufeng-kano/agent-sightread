@@ -24,10 +24,11 @@ Unreadable page → entry in `errors`, parsing continues. Whole document unreada
 - Figures: `bbox` = `[ymin, xmin, ymax, xmax]`, normalized 0–1000, origin top-left (`yxyx_norm1000`, Gemini-native — prompt the model for this format explicitly).
 - The service **never converts coordinates**; the response declares `meta.bbox_format` and the receiver does the one and only conversion at crop time.
 - Placeholder: `![fig{n}](sightread://p{page}/{ymin},{xmin},{ymax},{xmax})`, caption verbatim on the next line.
+- Figure ids are document-wide (`fig1`, `fig2`, …) and the page number is **ours**, not the model's. On a vision page the model emits the placeholder in place; on a text-layer page the boxes come from a separate detection call and are appended at the end of that page's markdown, in the order the model returned them. Boxes are clamped to 0–1000; a box that is still degenerate (zero or negative area) is dropped, never guessed at.
 
 ## Profiles
 
-A profile = model id + coordinate prompt template + response parser + `bbox_format` + profile version. Presets ship in code (e.g. `gemini-yxyx` targeting current Gemini flash-tier vision models — resolve actual ids from the live `/v1/models` catalog at startup, never hard-code a dead id). Users may instead pick **any** image-input model: it runs with the default prompt template, is labeled untested, and bbox quality is explicitly their responsibility.
+A profile = model id + coordinate prompt template + response parser + `bbox_format` + profile version. Presets ship in code (e.g. `gemini-yxyx` targeting current Gemini flash-tier vision models — resolve actual ids from the live `/v1/models` catalog at startup, never hard-code a dead id). Users may instead pick **any** image-input model: it runs with the default prompt template, is labeled untested, and bbox quality is explicitly their responsibility. Such a job stores `profile: null` and `profile_version: 0`, so a change to the default templates is covered by `PIPELINE_VERSION` instead.
 
 `profile_version` and global `PIPELINE_VERSION` are part of the dedup cache key ([jobs.md](./jobs.md)) so prompt/pipeline improvements invalidate old cached results.
 

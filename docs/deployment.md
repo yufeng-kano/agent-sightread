@@ -45,6 +45,7 @@ Uploads and SSE go straight through Caddy to FastAPI — never through the Nuxt/
 | `AUTH_DEV_MODE` | local only |
 | `UPLOAD_MAX_BYTES`, `PAGE_CAP`, `MAX_JOBS_PER_USER`, `VISION_CONCURRENCY_PER_JOB`, `RENDER_WORKERS` | defaults in [api.md](./api.md) / [jobs.md](./jobs.md) |
 | `UPLOAD_DIR` | `/data/uploads` in containers |
+| `PG_PORT` | local compose only: host port for `pg` (default 5432); change it when that port is taken |
 
 Secrets live in `.env` (gitignored) on the server; tracked files carry placeholders only. Never print secret values — only whether one exists.
 
