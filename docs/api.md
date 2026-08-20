@@ -5,7 +5,7 @@ Two planes, one FastAPI app:
 - **Data plane `/v1/*`** — authenticated by API key (`Authorization: Bearer sr_...`) or an OAuth access token ([auth.md](./auth.md)). This is the product.
 - **Control plane `/api/*`** — session cookie (Google OIDC), consumed only by the Nuxt web app.
 
-All responses are JSON unless SSE is requested. Errors use one shape:
+`GET /healthz` is public and DB-free (`{"ok": true}`), for compose healthchecks. All responses are JSON unless SSE is requested. Errors use one shape:
 
 ```json
 { "error": { "type": "invalid_request | auth | rate_limit | payment | upstream | internal", "message": "..." } }
@@ -64,7 +64,7 @@ Events: `progress` (`{pages_done, page_count, page, method}` per finished page),
 
 ### GET /v1/models
 
-OpenRouter model catalog filtered to `architecture.input_modalities` containing `"image"`, cached server-side ~1 h. Each entry carries `recommended: true` when a preset profile targets it. Never hard-code model ids.
+Also accepts a web session cookie (with `GET /v1/profiles`, the two read-only routes the web app may call on the data plane). OpenRouter model catalog filtered to `architecture.input_modalities` containing `"image"`, cached server-side ~1 h. Each entry carries `recommended: true` when a preset profile targets it. Never hard-code model ids.
 
 ### GET /v1/profiles
 
@@ -77,7 +77,7 @@ Preset profiles (id, name, model, bbox_format, description).
 | `GET /api/auth/login` → Google, `GET /api/auth/callback`, `POST /api/auth/logout` | OIDC flow ([auth.md](./auth.md)) |
 | `GET /api/me` | current user + settings + whether an OpenRouter key is stored (masked, never the value) |
 | `GET/POST/DELETE /api/keys` | API keys; plaintext returned exactly once on create |
-| `PUT/DELETE /api/openrouter-key` | store (validated against `GET https://openrouter.ai/api/v1/key` before save) / remove |
+| `GET/PUT/DELETE /api/openrouter-key` | read masked form / store (validated against `GET https://openrouter.ai/api/v1/key` before save) / remove |
 | `PUT /api/settings` | default model / profile |
 | `GET /api/usage?days=30` | per-day and per-model aggregates of tokens + cost from `usage_log` |
 | `GET /api/jobs?limit=50` | recent jobs (history); `GET /api/jobs/{id}/result` same payload as data plane |
