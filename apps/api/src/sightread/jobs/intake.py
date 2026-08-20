@@ -1,0 +1,244 @@
+"""Parse intake: everything between "bytes arrive" and "a job exists" (docs/api.md, docs/jobs.md).
+
+`POST /v1/parse` and the MCP `parse_*` tools run this one sequence — store, hash, probe,
+dedup, enqueue — so the caps, the page limit and the dedup key cannot drift between the two
+entry points. The callers keep only their own transport concerns (multipart vs base64, SSE
+vs progress notifications); the shells own no business logic (docs/project-structure.md).
+"""
+
+from __future__ import annotations
+
+import base64
+import binascii
+import hashlib
+import uuid
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from pathlib import Path
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ..config import Settings
+from ..db.models import Job, Result, User
+from ..errors import ApiError
+from ..parsing import poppler
+from ..parsing.images import ACCEPTED_IMAGE_TYPES, ImageError, probe_image
+from ..parsing.profiles import BBOX_FORMAT_YXYX, get_profile
+from ..upstream.openrouter import fetch_image_models
+from .queue import (
+    count_running_jobs,
+    enqueue_job,
+    find_cached_job,
+    normalize_pages_spec,
+    parse_pages_spec,
+)
+from .runner import result_payload
+
+PDF_MEDIA_TYPE = "application/pdf"
+RETRY_AFTER_SECONDS = 30
+# Base64 decodes in whole 4-character groups, so the slice length must stay a multiple of 4.
+BASE64_CHUNK_CHARS = 4 * 256 * 1024
+
+
+@dataclass
+class Submission:
+    """The outcome of an intake: either a queued job or a cached result, never both."""
+
+    job: Job | None = None
+    cached: Result | None = None
+
+
+async def base64_chunks(source: str) -> AsyncIterator[bytes]:
+    """Decode a base64 `source` in slices, so a large document never sits in memory twice."""
+    compact = "".join(source.split())
+    for start in range(0, len(compact), BASE64_CHUNK_CHARS):
+        piece = compact[start : start + BASE64_CHUNK_CHARS]
+        try:
+            yield base64.b64decode(piece, validate=False)
+        except (binascii.Error, ValueError) as exc:
+            raise ApiError(400, "invalid_request", "'source' is not valid base64") from exc
+
+
+def resolve_kind(filename: str, media_type: str) -> tuple[str, str]:
+    """Decide pdf vs image from the declared type, falling back to the file extension."""
+    suffix = Path(filename).suffix.lower()
+    if media_type == PDF_MEDIA_TYPE or suffix == ".pdf":
+        return "pdf", PDF_MEDIA_TYPE
+    if media_type in ACCEPTED_IMAGE_TYPES:
+        return "image", media_type
+    for accepted, extension in ACCEPTED_IMAGE_TYPES.items():
+        if suffix == extension:
+            return "image", accepted
+    raise ApiError(400, "invalid_request", "Only PDF and jpg/png/webp/heic images are accepted")
+
+
+async def resolve_target(
+    user: User, model: str | None, profile_id: str | None
+) -> tuple[str, str | None, int, str]:
+    """Model, profile, profile version and bbox format for this job.
+
+    A preset profile resolves its model from the live catalog. A raw model id runs the
+    default prompts and is untested by us (docs/parsing.md § Profiles).
+    """
+    settings_row = user.settings
+    if not model and not profile_id:
+        profile_id = settings_row.default_profile if settings_row else None
+        model = settings_row.default_model if settings_row else None
+    if model and profile_id:
+        raise ApiError(400, "invalid_request", "Pass either 'model' or 'profile', not both")
+
+    if profile_id:
+        profile = get_profile(profile_id)
+        if profile is None:
+            raise ApiError(400, "invalid_request", f"Unknown profile '{profile_id}'")
+        resolved = profile.resolve_model(await fetch_image_models())
+        if resolved is None:
+            raise ApiError(503, "upstream", f"Profile '{profile_id}' has no available model")
+        return resolved, profile.id, profile.profile_version, profile.bbox_format
+
+    if model:
+        return model, None, 0, BBOX_FORMAT_YXYX
+
+    raise ApiError(
+        400, "invalid_request", "No model configured: pass 'model' or 'profile', or set a default"
+    )
+
+
+async def store_upload(
+    chunks: AsyncIterator[bytes], destination: Path, max_bytes: int
+) -> tuple[int, str]:
+    """Stream an upload to disk, hashing as it goes; the whole file never sits in memory."""
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        with destination.open("wb") as handle:
+            async for chunk in chunks:
+                size += len(chunk)
+                if size > max_bytes:
+                    raise ApiError(413, "invalid_request", "The upload exceeds UPLOAD_MAX_BYTES")
+                digest.update(chunk)
+                handle.write(chunk)
+    except BaseException:
+        destination.unlink(missing_ok=True)
+        raise
+    return size, digest.hexdigest()
+
+
+async def count_pages(kind: str, path: Path, upload_dir: Path, page_cap: int) -> int:
+    """Page count for a stored upload, rejecting documents we cannot read or must not run."""
+    if kind == "image":
+        try:
+            probe_image(path)
+        except ImageError as exc:
+            path.unlink(missing_ok=True)
+            raise ApiError(400, "invalid_request", "The image could not be decoded") from exc
+        return 1
+
+    try:
+        info = await poppler.pdf_info(path, cwd=upload_dir)
+    except poppler.PopplerError as exc:
+        path.unlink(missing_ok=True)
+        raise ApiError(400, "invalid_request", "The PDF could not be read") from exc
+    if info.page_count > page_cap:
+        path.unlink(missing_ok=True)
+        raise ApiError(400, "invalid_request", f"The PDF exceeds the {page_cap} page cap")
+    return info.page_count
+
+
+def default_filename(media_type: str) -> str:
+    """A filename for callers that upload bytes without one (the MCP tools)."""
+    if media_type == PDF_MEDIA_TYPE:
+        return "upload.pdf"
+    return f"upload{ACCEPTED_IMAGE_TYPES.get(media_type, '')}"
+
+
+async def submit_parse(
+    db: AsyncSession,
+    settings: Settings,
+    *,
+    user: User,
+    chunks: AsyncIterator[bytes],
+    media_type: str,
+    filename: str | None = None,
+    model: str | None = None,
+    profile_id: str | None = None,
+    pages: str | None = None,
+    force: bool = False,
+) -> Submission:
+    """Store the document, dedup it and queue the parse. Commits before it returns."""
+    filename = filename or default_filename(media_type)
+    kind, media_type = resolve_kind(filename, media_type)
+    target_model, target_profile, profile_version, bbox_format = await resolve_target(
+        user, model, profile_id
+    )
+
+    if await count_running_jobs(db, user.id) >= settings.max_jobs_per_user:
+        raise ApiError(
+            429,
+            "rate_limit",
+            "Too many running jobs; retry when one finishes",
+            headers={"Retry-After": str(RETRY_AFTER_SECONDS)},
+        )
+
+    upload_dir = Path(settings.upload_dir)
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    job_id = uuid.uuid4()
+    stored = upload_dir / f"{job_id}{Path(filename).suffix.lower()[:16]}"
+    size_bytes, sha256 = await store_upload(chunks, stored, settings.upload_max_bytes)
+
+    page_count = await count_pages(kind, stored, upload_dir, settings.page_cap)
+    pages_spec = normalize_pages_spec(pages)
+    try:
+        parse_pages_spec(pages_spec, page_count)
+    except ValueError as exc:
+        stored.unlink(missing_ok=True)
+        raise ApiError(400, "invalid_request", str(exc)) from exc
+
+    if not force:
+        cached = await find_cached_job(
+            db,
+            user_id=user.id,
+            sha256=sha256,
+            model=target_model,
+            profile=target_profile,
+            profile_version=profile_version,
+            pages_spec=pages_spec,
+        )
+        result = (
+            None
+            if cached is None
+            else (
+                await db.execute(select(Result).where(Result.job_id == cached.id))
+            ).scalar_one_or_none()
+        )
+        if result is not None:
+            # The cache already holds this exact parse; the fresh copy is dead weight.
+            stored.unlink(missing_ok=True)
+            return Submission(cached=result)
+
+    job = await enqueue_job(
+        db,
+        user_id=user.id,
+        kind=kind,
+        filename=filename,
+        media_type=media_type,
+        size_bytes=size_bytes,
+        sha256=sha256,
+        pages_spec=pages_spec,
+        model=target_model,
+        profile=target_profile,
+        profile_version=profile_version,
+        bbox_format=bbox_format,
+        page_count=page_count,
+        source_path=str(stored),
+    )
+    await db.commit()
+    return Submission(job=job)
+
+
+def cached_payload(result: Result) -> dict:
+    """The result payload of a dedup hit, flagged `meta.cached` (docs/jobs.md § Dedup)."""
+    payload = result_payload(result)
+    payload["meta"] = {**payload["meta"], "cached": True}
+    return payload
