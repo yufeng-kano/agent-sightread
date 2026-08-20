@@ -25,7 +25,7 @@ Claude custom connectors assume OAuth 2.1 on remote MCP servers and attempt Dyna
 
 - Discovery: `/.well-known/oauth-authorization-server` (RFC 8414) and `/.well-known/oauth-protected-resource` (RFC 9728, pointing at `/mcp`).
 - `POST /oauth/register` — open DCR (RFC 7591), redirect URIs restricted to `https://` (plus `http://localhost` for local).
-- `GET /oauth/authorize` — requires a web session (redirects to Google login and back if absent), renders a minimal consent page (server-rendered by FastAPI, not Nuxt), issues a short-lived code bound to PKCE S256.
+- `GET /oauth/authorize` — requires a web session (redirects to Google login and back if absent), renders the consent page (server-rendered by FastAPI, not Nuxt), issues a short-lived code bound to PKCE S256. The page is one card carrying its own styles, mark and icon links inline: it may open in a stripped-down connector webview, so it makes no external request and cannot half-load while asking for account access. Its palette is a narrowed copy of the web app's tokens ([web.md](./web.md)) — duplicated deliberately, since FastAPI cannot import the Nuxt stylesheet and consent must not depend on the web app being up. English only for now; it is the one user-facing surface outside the i18n catalog.
 - `POST /oauth/token` — code + PKCE → access token (opaque random, stored hashed, 1 h) + refresh token (30 d, rotating). Access tokens authenticate `/mcp` and `/v1/*` exactly like an API key, resolved to the same user.
 
 Result: adding the connector in Claude is "paste URL → Google login → consent" — no manual key copying.

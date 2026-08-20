@@ -11,7 +11,14 @@ export default defineNuxtConfig({
     head: {
       htmlAttrs: { lang: 'en' },
       meta: [{ name: 'viewport', content: 'width=device-width, initial-scale=1' }],
-      link: [{ rel: 'icon', href: '/favicon.svg', type: 'image/svg+xml' }],
+      // The .ico is not decoration: clients that do not take SVG (and connector webviews
+      // that just fetch /favicon.ico) fall back to whatever icon they already hold for the
+      // parent domain when this 404s or answers a blank placeholder.
+      link: [
+        { rel: 'icon', href: '/favicon.svg', type: 'image/svg+xml' },
+        { rel: 'icon', href: '/favicon.ico', sizes: '48x48' },
+        { rel: 'apple-touch-icon', href: '/apple-touch-icon.png' },
+      ],
     },
   },
 

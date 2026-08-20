@@ -23,6 +23,7 @@ Nuxt (latest stable) + TypeScript + `@nuxtjs/i18n` (en, zh-TW; en is the source 
 - One layout, `default`: the signed-in fixed frame following kano-proxy's AppShell — a left sidebar (brand head, icon+label nav for dashboard/jobs/keys/connect/settings, foot with an account row: avatar initial + name opening a popover with the language links and sign-out), a fixed grid where only the content region scrolls, and below 1080px the sidebar becomes a focus-trapped drawer behind a header menu button. The sign-in page is full-bleed two-column and owns its own frame (`layout: false`), sharing tokens only; the locale switch component appears only there.
 - Shared primitives live in `app/components/ui/`: DataTable (the only table markup, sticky headers, <768px card fallback), Modal, Button, TextInput, Select, CopyField, UsageBar, status dot+word. Icon-only controls carry `label` (= aria-label + tooltip); destructive actions keep their visible word.
 - Cards bound scroll regions; never page skeleton, never nested. Empty states say what would be here. A failed refresh keeps its data.
+- Icons ship as three files in `public/`: `favicon.svg` (the source mark), `favicon.ico` (16/32/48, generated from it) and `apple-touch-icon.png` (180). All three are declared in `nuxt.config.ts`, and the FastAPI consent page declares them too. The `.ico` is not redundant: clients that do not take SVG — connector webviews among them — request `/favicon.ico`, and when that answers a blank placeholder they fall back to whatever icon they already hold for the parent domain.
 
 ## Rules
 
