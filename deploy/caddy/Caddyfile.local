@@ -5,7 +5,7 @@ http://localhost:8080 {
 		max_size 128MB
 	}
 
-	@api path /v1/* /api/* /oauth/* /mcp /mcp/* /.well-known/*
+	@api path /healthz /v1/* /api/* /oauth/* /mcp /mcp/* /.well-known/*
 	handle @api {
 		reverse_proxy api:8000 {
 			flush_interval -1

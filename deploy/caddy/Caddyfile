@@ -27,7 +27,7 @@
 	# authorization server, its discovery documents, and the MCP endpoint. The ACME
 	# challenge also lives under /.well-known/, but Caddy answers that itself on :80
 	# before any route here is consulted.
-	@api path /v1/* /api/* /oauth/* /mcp /mcp/* /.well-known/*
+	@api path /healthz /v1/* /api/* /oauth/* /mcp /mcp/* /.well-known/*
 	handle @api {
 		reverse_proxy api:8000 {
 			# Uploads and SSE go straight through: no response buffering, and long idle

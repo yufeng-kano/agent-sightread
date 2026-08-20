@@ -55,13 +55,13 @@ docker compose -f docker-compose.production.yaml -f docker-compose.only-containe
 <domain> {
   tls { issuer acme { disable_http_challenge } }   # validate over 443 (TLS-ALPN-01), never :80
   request_body { max_size 128MB }        # keep in sync with UPLOAD_MAX_BYTES
-  @api path /v1/* /api/* /oauth/* /mcp /mcp/* /.well-known/*
+  @api path /healthz /v1/* /api/* /oauth/* /mcp /mcp/* /.well-known/*
   handle @api { reverse_proxy api:8000 }
   handle      { reverse_proxy web:3000 }
 }
 ```
 
-Uploads and SSE go straight through Caddy to FastAPI — never through the Nuxt/Node server. Disable proxy buffering for SSE routes; long-lived connections need generous idle timeouts.
+`/healthz` is listed first so an external monitor hits the API rather than the Nuxt 404 page. Uploads and SSE go straight through Caddy to FastAPI — never through the Nuxt/Node server. Disable proxy buffering for SSE routes; long-lived connections need generous idle timeouts.
 
 As built: the domain comes from `{$DOMAIN}` and the ACME contact from `{$ACME_EMAIL}` (both in `.env`, passed to the caddy service), the API proxy sets `flush_interval -1` (no response buffering, for SSE and MCP streams) and 30-minute read/write timeouts.
 
