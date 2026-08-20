@@ -1,0 +1,21 @@
+# secrets / local
+.env
+.local/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# node
+node_modules/
+.nuxt/
+.output/
+dist/
+
+# data / artifacts
+uploads/
+*.dump
+.DS_Store
