@@ -1,36 +1,189 @@
-/* One stylesheet, hand-rolled (docs/web.md). Light and dark from prefers-color-scheme. */
+/**
+ * Design tokens and the small set of genuinely global rules (docs/web.md).
+ *
+ * Everything visual is a token: color, spacing, radius, type, motion. A raw hex, a raw
+ * `padding: 13px`, or a raw `font-size: 15px` inside a component is the same class of bug
+ * — it escapes the scale and drifts.
+ *
+ * Component styles live with their components (`app/components/ui/*.vue`). This file holds
+ * only what has no component to belong to: the token blocks, the document reset, and the
+ * three utilities (`.sr-only`, `.mono`, `.tabular`) any of them may need.
+ *
+ * Light and dark are both first-class: every color token below is redeclared in the single
+ * `prefers-color-scheme: dark` block, and nothing outside these two blocks names a color.
+ */
 
 :root {
-  --bg: #ffffff;
-  --surface: #f6f6f5;
-  --fg: #17181a;
-  --muted: #5c6067;
-  --line: #d9dade;
-  --accent: #1f5fd6;
-  --accent-fg: #ffffff;
-  --danger: #b3261e;
-  --ok: #1a6b3c;
-  --control-height: 2.25rem;
-  --radius: 4px;
-  --page-width: 58rem;
+  color-scheme: light dark;
+
+  /* --- Color: surfaces and text ------------------------------------------ */
+  --bg: #f4f4f5;
+  --surface: #ffffff;
+  --surface-2: #fafafa;
+  --border: #e4e4e7;
+  --border-strong: #d4d4d8;
+  --text: #18181b;
+  /* Secondary text ramp — each step one stop darker than the obvious choice so all three
+     clear WCAG AA (4.5:1) on --surface. */
+  --text-secondary: #3f3f46;
+  --muted: #52525b;
+  --faint: #6b6b74;
+  --accent: #18181b;
+  --accent-fg: #fafafa;
+  --accent-hover: #27272a;
+  --hover: #f4f4f5;
+  /* The sticky page header's wash — a translucent tint of --bg, not of --surface, so a
+     stuck header reads as the page frosting out under the controls rather than as a card
+     slab sitting on it. */
+  --topbar-bg: rgb(244 244 245 / 72%);
+  --topbar-blur: 24px;
+
+  /* --- Color: status ------------------------------------------------------ */
+  --danger: #b91c1c;
+  --danger-bg: #fef2f2;
+  --danger-border: #fecaca;
+  --warn: #a16207;
+  --warn-bg: #fefce8;
+  --warn-border: #fde68a;
+  --ok: #15803d;
+  --ok-bg: #f0fdf4;
+  --ok-border: #bbf7d0;
+  --ok-ring: 0 0 0 3px rgb(21 128 61 / 15%);
+  /* Work in progress — informational, deliberately outside the ok/warn/danger hues so a
+     running job never reads as a problem. */
+  --info: #2a78d6;
+  --standby: #71717a;
+  --bar-track: #e4e4e7;
+  --bar-fill: #52525b;
+
+  /* --- Color: interaction ------------------------------------------------- */
+  /* Focus indicator — needs 3:1 against --surface per WCAG 1.4.11. */
+  --ring-border: #71717a;
+  --ring: 0 0 0 3px rgb(24 24 27 / 6%);
+  --overlay: rgb(0 0 0 / 35%);
+  --shadow: 0 1px 2px rgb(0 0 0 / 4%), 0 4px 12px rgb(0 0 0 / 4%);
+  --shadow-lg: 0 16px 40px rgb(0 0 0 / 12%);
+
+  /* --- Spacing ------------------------------------------------------------
+     A 4px base. Component padding, gaps, and margins pick from here so density is tuned in
+     one place instead of drifting per component. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* --- Radius -------------------------------------------------------------- */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 14px;
+  --radius-full: 999px;
+
+  /* --- Type ---------------------------------------------------------------
+     A dense-UI scale: 11px is the smallest thing that ships (uppercase table headers and
+     badges only), 13px is table body, 14px is app body, and the display sizes are reserved
+     for stat values, page titles, and the landing hero. */
+  --text-2xs: 11px;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-md: 16px;
+  --text-lg: 20px;
+  --text-xl: 26px;
+  --text-2xl: 34px;
+
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* Negative tracking on display sizes only — it hurts legibility at 13px. */
+  --tracking-tight: -0.02em;
+  --tracking-tighter: -0.03em;
+  --tracking-wide: 0.04em;
+
+  /* --- Motion -------------------------------------------------------------
+     Hover/press use --duration-fast; a panel entering uses --ease-enter at --duration-slow
+     and leaving uses --ease-exit at --duration. Never transition `all` — name the
+     properties. */
+  --ease: cubic-bezier(0.72, 0, 0.16, 1);
+  --ease-enter: cubic-bezier(0.24, 1, 0.32, 1);
+  --ease-exit: cubic-bezier(0.64, 0, 0.8, 0);
+  --duration-fast: 120ms;
+  --duration: 160ms;
+  --duration-slow: 240ms;
+
+  /* --- Layout -------------------------------------------------------------- */
+  /* One shared height for every control on a row — a button beside an input must be the
+     same box, and per-control padding is what makes those drift apart. */
+  --control-height: 34px;
+  --header-height: 56px;
+  /* Caps the content column so a table does not stretch across an ultrawide display. Sized
+     to use a laptop width, not to a reading measure — the landing caps itself at a real
+     measure instead. */
+  --content-max: 1280px;
+  /* How tall a card's list may grow before it scrolls inside the card instead of taking the
+     page with it — so a page that stacks two collections bounds each of them. */
+  --group-max: 420px;
+
   --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
     "Noto Sans TC", sans-serif;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
+/* Touch targets need more than 34px on a coarse pointer. Raising the shared value is what
+   keeps a button and the input beside it the same box there — growing them per component
+   is how the two drift apart. */
+@media (pointer: coarse) {
   :root {
-    --bg: #131416;
-    --surface: #1c1e21;
-    --fg: #e8e9ea;
-    --muted: #a0a4ab;
-    --line: #33363b;
-    --accent: #7aa5f0;
-    --accent-fg: #10131a;
-    --danger: #f2857c;
-    --ok: #6fcf97;
+    --control-height: 40px;
   }
 }
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #09090b;
+    --surface: #131316;
+    --surface-2: #1b1b1f;
+    --border: #27272a;
+    --border-strong: #3f3f46;
+    --text: #fafafa;
+    --text-secondary: #d4d4d8;
+    --muted: #a1a1aa;
+    --faint: #8b8b95;
+    --accent: #fafafa;
+    --accent-fg: #18181b;
+    --accent-hover: #e4e4e7;
+    --hover: #27272a;
+    --topbar-bg: rgb(9 9 11 / 72%);
+    --danger: #f87171;
+    --danger-bg: #2a1416;
+    --danger-border: #7f1d1d;
+    --warn: #fbbf24;
+    --warn-bg: #261d09;
+    --warn-border: #78350f;
+    --ok: #4ade80;
+    --ok-bg: #0c1f14;
+    --ok-border: #14532d;
+    --ok-ring: 0 0 0 3px rgb(74 222 128 / 18%);
+    --info: #3987e5;
+    --standby: #a1a1aa;
+    --bar-track: #27272a;
+    --bar-fill: #a1a1aa;
+    --ring-border: #71717a;
+    --ring: 0 0 0 3px rgb(250 250 250 / 10%);
+    --overlay: rgb(0 0 0 / 60%);
+    --shadow: 0 1px 2px rgb(0 0 0 / 30%), 0 4px 12px rgb(0 0 0 / 25%);
+    --shadow-lg: 0 16px 40px rgb(0 0 0 / 50%);
+  }
+}
+
+/* --- Document ------------------------------------------------------------- */
 
 *,
 *::before,
@@ -38,299 +191,112 @@
   box-sizing: border-box;
 }
 
-html {
-  color-scheme: light dark;
-}
-
 body {
   margin: 0;
   background: var(--bg);
-  color: var(--fg);
+  color: var(--text);
   font-family: var(--font);
-  font-size: 16px;
-  line-height: 1.55;
+  font-size: var(--text-base);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
   -webkit-text-size-adjust: 100%;
-}
-
-a {
-  color: var(--accent);
 }
 
 h1,
 h2,
 h3 {
-  line-height: 1.25;
   margin: 0;
-  font-weight: 600;
-}
-
-h1 {
-  font-size: 1.75rem;
-}
-
-h2 {
-  font-size: 1.15rem;
+  line-height: 1.3;
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-tight);
 }
 
 p {
   margin: 0;
 }
 
-code,
-pre,
-.mono {
-  font-family: var(--mono);
-  font-size: 0.9em;
-}
-
-pre {
-  margin: 0;
-  padding: 0.75rem 0.9rem;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  overflow-x: auto;
-  white-space: pre;
-}
-
-/* --- shell --------------------------------------------------------------- */
-
-.page {
-  width: 100%;
-  max-width: var(--page-width);
-  margin: 0 auto;
-  padding: 0 1.25rem;
-}
-
-.site-header {
-  border-bottom: 1px solid var(--line);
-}
-
-.site-header > .page {
-  display: flex;
-  align-items: center;
-  gap: 1.25rem;
-  min-height: 3.5rem;
-  flex-wrap: wrap;
-}
-
-.site-header nav {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-}
-
-.brand {
-  font-weight: 600;
-  color: inherit;
-  text-decoration: none;
-  margin-inline-end: auto;
-}
-
-.site-header nav a {
-  color: var(--muted);
-  text-decoration: none;
-}
-
-.site-header nav a:hover,
-.site-header nav a.router-link-active {
-  color: var(--fg);
-}
-
-main.page {
-  padding-block: 2rem 4rem;
-  display: flex;
-  flex-direction: column;
-  gap: 2.5rem;
-}
-
-section {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-.section-head {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  justify-content: space-between;
-  border-bottom: 1px solid var(--line);
-  padding-bottom: 0.4rem;
-}
-
-.muted {
-  color: var(--muted);
-}
-
-.empty {
-  color: var(--muted);
-  padding: 0.75rem 0;
-}
-
-.error {
-  color: var(--danger);
-}
-
-.notice {
-  border-inline-start: 3px solid var(--accent);
-  padding: 0.5rem 0 0.5rem 0.75rem;
-}
-
-.notice-warning {
-  border-inline-start-color: var(--danger);
-}
-
-/* --- controls ------------------------------------------------------------ */
-
-.row {
-  display: flex;
-  align-items: stretch;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-  min-width: 14rem;
-  flex: 1 1 16rem;
-}
-
-label {
-  font-size: 0.9rem;
-  color: var(--muted);
-}
-
+button,
 input,
 select,
-button {
+textarea {
   font: inherit;
-  height: var(--control-height);
-  padding: 0 0.6rem;
-  border-radius: var(--radius);
-  border: 1px solid var(--line);
-  background: var(--bg);
-  color: var(--fg);
+  color: inherit;
 }
 
-select {
-  max-width: 100%;
+a {
+  color: inherit;
+  text-decoration: none;
 }
 
-button {
-  cursor: pointer;
+/* One focus convention for the whole app: a 2px ring that clears 3:1 on any surface
+   (WCAG 1.4.11), never removed, never replaced per component. */
+:focus-visible {
+  outline: 2px solid var(--ring-border);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
 }
 
-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
+/* Scrollbars: thin and quiet, but always present so a scrollable region announces itself. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
 }
 
-button.primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-fg);
-  font-weight: 500;
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
 }
 
-button.icon {
-  width: var(--control-height);
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: var(--radius-full);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--faint);
+  background-clip: content-box;
+}
+
+/* --- Global utilities -----------------------------------------------------
+   The only three that earn a global: `.sr-only` is needed by components with no stylesheet
+   of their own, `.mono` is the app's one typographic mode switch, and `.tabular` keeps a
+   column of figures from jittering between values. */
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
   padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: none;
-  border-color: transparent;
-  color: var(--muted);
-}
-
-button.icon:hover {
-  color: var(--fg);
-  border-color: var(--line);
-}
-
-button.icon.danger:hover {
-  color: var(--danger);
-}
-
-button.link {
-  height: auto;
-  padding: 0;
-  border: none;
-  background: none;
-  color: var(--accent);
-  text-align: start;
-}
-
-/* --- tables -------------------------------------------------------------- */
-
-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-variant-numeric: tabular-nums;
-}
-
-th,
-td {
-  text-align: start;
-  padding: 0.45rem 0.75rem 0.45rem 0;
-  border-bottom: 1px solid var(--line);
-  vertical-align: middle;
-}
-
-th {
-  font-weight: 500;
-  color: var(--muted);
-  font-size: 0.9rem;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
   white-space: nowrap;
+  border: 0;
 }
 
-td.numeric,
-th.numeric {
-  text-align: end;
-  padding-inline-end: 0;
+.mono {
+  font-family: var(--mono);
+  font-size: 0.95em;
+  font-variant-ligatures: none;
 }
 
-.table-scroll {
-  overflow-x: auto;
-}
-
-/* Usage bar: width is the row's share of the largest value in the column. */
-.bar {
-  display: block;
-  height: 0.4rem;
-  min-width: 1px;
-  background: var(--accent);
-  border-radius: 1px;
-}
-
-.bar-cell {
-  width: 40%;
-  min-width: 6rem;
-}
-
-.totals {
-  display: flex;
-  gap: 2.5rem;
-  flex-wrap: wrap;
-}
-
-.total-value {
-  font-size: 1.35rem;
+.tabular {
   font-variant-numeric: tabular-nums;
 }
 
-.status-failed {
-  color: var(--danger);
-}
-
-.status-succeeded {
-  color: var(--ok);
-}
-
-.result-json {
-  max-height: 24rem;
-  overflow: auto;
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
