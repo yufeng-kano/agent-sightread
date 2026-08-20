@@ -1,8 +1,10 @@
 export default {
   app: {
     name: 'agent-sightread',
+    skipToContent: '跳到主要內容',
   },
   nav: {
+    primary: '主要導覽',
     dashboard: '用量',
     keys: 'API 金鑰',
     settings: '設定',
@@ -17,6 +19,8 @@ export default {
     refresh: '重新載入',
     save: '儲存',
     delete: '刪除',
+    cancel: '取消',
+    close: '關閉',
     loading: '載入中…',
     never: '未使用過',
     notSet: '未設定',
@@ -64,7 +68,9 @@ export default {
     columnCost: '花費',
     columnPrompt: '輸入',
     columnCompletion: '輸出',
+    columnShare: '佔本表最高花費的比例',
     empty: '尚無用量紀錄。',
+    emptyBody: '解析文件後，花費與 token 會依日期與模型顯示在這裡。',
   },
   keys: {
     headTitle: 'API 金鑰',
@@ -77,9 +83,12 @@ export default {
     columnPrefix: '金鑰',
     columnCreated: '建立時間',
     columnLastUsed: '最後使用',
-    revoke: '撤銷這組金鑰',
+    revoke: '撤銷',
+    revokeKey: '撤銷 {name}',
+    revokeTitle: '撤銷 API 金鑰',
     revokeConfirm: '要撤銷金鑰「{name}」嗎？使用這組金鑰的請求會立即失效。',
     empty: '尚未建立任何 API 金鑰。',
+    emptyBody: '金鑰用來授權 /v1 請求與 MCP 連接器。建立一組即可開始解析。',
     usageNote: '呼叫 /v1 時以 Authorization: Bearer 帶上金鑰。',
     mcpTitle: 'Claude 連接器',
     mcpBody:
@@ -110,9 +119,10 @@ export default {
     columnModel: '模型',
     columnCreated: '建立時間',
     columnPages: '頁數',
-    showResult: '顯示結果 JSON',
-    hideResult: '隱藏結果 JSON',
+    result: '結果 JSON',
+    showResultFor: '顯示 {name} 的結果 JSON',
     empty: '尚無解析工作。',
+    emptyBody: '透過 API 或連接器解析過的文件都會列在這裡。',
     status: {
       queued: '排隊中',
       running: '執行中',

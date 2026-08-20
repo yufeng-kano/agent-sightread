@@ -30,6 +30,7 @@ const keyInput = ref('')
 const keyPending = ref(false)
 const keyError = ref<string | null>(null)
 const keyMessage = ref<string | null>(null)
+const confirmingDelete = ref(false)
 
 const defaultModel = ref('')
 const defaultProfile = ref('')
@@ -67,14 +68,12 @@ async function saveOpenRouterKey() {
 }
 
 async function removeOpenRouterKey() {
-  if (!window.confirm(t('settings.openrouterDeleteConfirm'))) {
-    return
-  }
   keyPending.value = true
   keyError.value = null
   keyMessage.value = null
   try {
     await deleteOpenRouterKey()
+    confirmingDelete.value = false
     await auth.refresh()
   } catch (error) {
     keyError.value = await resolve(error)
@@ -103,123 +102,169 @@ async function saveDefaults() {
 </script>
 
 <template>
-  <main class="page">
-    <section>
-      <h2 class="section-head">{{ t('settings.openrouterTitle') }}</h2>
+  <div class="page">
+    <UiPageHeader :title="t('settings.headTitle')" />
 
-      <p v-if="openrouterKey?.present && openrouterKey.updated_at">
-        {{
-          t('settings.openrouterStored', {
-            masked: openrouterKey.masked,
-            updated: formatDateTime(openrouterKey.updated_at, locale),
-          })
-        }}
-      </p>
-      <p v-else class="muted">{{ t('settings.openrouterMissing') }}</p>
+    <div class="stack">
+      <UiCard :title="t('settings.openrouterTitle')">
+        <div class="section">
+          <!-- The stored state, in the tone it deserves: a missing key is why parsing would
+               fail, so it is written in the warning tone rather than boxed in a banner that
+               would still be there after the user fixed it. -->
+          <p v-if="openrouterKey?.present && openrouterKey.updated_at" class="state">
+            {{
+              t('settings.openrouterStored', {
+                masked: openrouterKey.masked,
+                updated: formatDateTime(openrouterKey.updated_at, locale),
+              })
+            }}
+          </p>
+          <p v-else class="state missing">{{ t('settings.openrouterMissing') }}</p>
 
-      <form class="row" @submit.prevent="saveOpenRouterKey">
-        <div class="field">
-          <label for="openrouter-key">{{ t('settings.openrouterLabel') }}</label>
-          <input
-            id="openrouter-key"
-            v-model="keyInput"
-            type="password"
-            autocomplete="off"
-            spellcheck="false"
-            required
-          >
-        </div>
-        <button class="primary submit" type="submit" :disabled="keyPending || !keyInput.trim()">
-          {{ t('common.save') }}
-        </button>
-        <button
-          v-if="openrouterKey?.present"
-          class="icon danger submit"
-          type="button"
-          :disabled="keyPending"
-          :title="t('settings.openrouterDelete')"
-          :aria-label="t('settings.openrouterDelete')"
-          @click="removeOpenRouterKey"
-        >
-          <svg
-            viewBox="0 0 24 24"
-            width="17"
-            height="17"
-            aria-hidden="true"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.7"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <path d="M4 7h16" />
-            <path d="M10 11v6M14 11v6" />
-            <path d="M6 7l1 13h10l1-13" />
-            <path d="M9 7V4h6v3" />
-          </svg>
-        </button>
-      </form>
-
-      <p v-if="keyError" class="error">{{ keyError }}</p>
-      <p v-else-if="keyMessage" class="muted">{{ keyMessage }}</p>
-    </section>
-
-    <section>
-      <h2 class="section-head">{{ t('settings.defaultsTitle') }}</h2>
-
-      <p v-if="catalogError" class="error">{{ catalogError }}</p>
-      <p v-else-if="!catalog" class="muted">{{ t('common.loading') }}</p>
-
-      <form v-else class="row" @submit.prevent="saveDefaults">
-        <div class="field">
-          <label for="default-model">{{ t('settings.defaultModel') }}</label>
-          <select id="default-model" v-model="defaultModel">
-            <option value="">{{ t('common.notSet') }}</option>
-            <optgroup v-if="recommendedModels.length" :label="t('settings.recommendedGroup')">
-              <option v-for="model in recommendedModels" :key="model.id" :value="model.id">
-                {{ modelLabel(model) }}
-              </option>
-            </optgroup>
-            <optgroup v-if="otherModels.length" :label="t('settings.otherModelsGroup')">
-              <option v-for="model in otherModels" :key="model.id" :value="model.id">
-                {{ modelLabel(model) }}
-              </option>
-            </optgroup>
-          </select>
-        </div>
-
-        <div class="field">
-          <label for="default-profile">{{ t('settings.defaultProfile') }}</label>
-          <select id="default-profile" v-model="defaultProfile">
-            <option value="">{{ t('common.notSet') }}</option>
-            <option
-              v-for="profile in catalog.profiles"
-              :key="profile.id"
-              :value="profile.id"
-              :disabled="!profile.available"
+          <form class="control-row" @submit.prevent="saveOpenRouterKey">
+            <UiField v-slot="{ id }" class="grow" :label="t('settings.openrouterLabel')">
+              <UiTextInput
+                :id="id"
+                v-model="keyInput"
+                type="password"
+                autocomplete="off"
+                required
+              />
+            </UiField>
+            <UiButton
+              variant="primary"
+              type="submit"
+              :loading="keyPending"
+              :disabled="!keyInput.trim()"
             >
-              {{
-                profile.available
-                  ? profile.name
-                  : t('settings.profileUnavailable', { name: profile.name })
-              }}
-            </option>
-          </select>
+              {{ t('common.save') }}
+            </UiButton>
+            <!-- Keeps its word: it destroys a credential the user has to fetch from OpenRouter
+                 again, which is not something a bare glyph should be able to do. -->
+            <UiButton
+              v-if="openrouterKey?.present"
+              variant="danger"
+              :disabled="keyPending"
+              @click="confirmingDelete = true"
+            >
+              <template #icon><UiIcon name="trash" /></template>
+              {{ t('settings.openrouterDelete') }}
+            </UiButton>
+          </form>
+
+          <UiBanner v-if="keyError" tone="error">{{ keyError }}</UiBanner>
+          <UiBanner v-else-if="keyMessage" tone="ok">{{ keyMessage }}</UiBanner>
         </div>
+      </UiCard>
 
-        <button class="primary submit" type="submit" :disabled="defaultsPending">
-          {{ t('common.save') }}
-        </button>
-      </form>
+      <UiCard :title="t('settings.defaultsTitle')">
+        <div class="section">
+          <UiBanner v-if="catalogError" tone="error">{{ catalogError }}</UiBanner>
+          <UiSkeleton v-else-if="!catalog" :rows="2" />
 
-      <p v-if="defaultsError" class="error">{{ defaultsError }}</p>
-      <p v-else-if="defaultsMessage" class="muted">{{ defaultsMessage }}</p>
-    </section>
-  </main>
+          <form v-else class="control-row" @submit.prevent="saveDefaults">
+            <UiField v-slot="{ id }" class="grow" :label="t('settings.defaultModel')">
+              <UiSelect :id="id" v-model="defaultModel">
+                <option value="">{{ t('common.notSet') }}</option>
+                <optgroup v-if="recommendedModels.length" :label="t('settings.recommendedGroup')">
+                  <option v-for="model in recommendedModels" :key="model.id" :value="model.id">
+                    {{ modelLabel(model) }}
+                  </option>
+                </optgroup>
+                <optgroup v-if="otherModels.length" :label="t('settings.otherModelsGroup')">
+                  <option v-for="model in otherModels" :key="model.id" :value="model.id">
+                    {{ modelLabel(model) }}
+                  </option>
+                </optgroup>
+              </UiSelect>
+            </UiField>
+
+            <UiField v-slot="{ id }" class="grow" :label="t('settings.defaultProfile')">
+              <UiSelect :id="id" v-model="defaultProfile">
+                <option value="">{{ t('common.notSet') }}</option>
+                <option
+                  v-for="profile in catalog.profiles"
+                  :key="profile.id"
+                  :value="profile.id"
+                  :disabled="!profile.available"
+                >
+                  {{
+                    profile.available
+                      ? profile.name
+                      : t('settings.profileUnavailable', { name: profile.name })
+                  }}
+                </option>
+              </UiSelect>
+            </UiField>
+
+            <UiButton variant="primary" type="submit" :loading="defaultsPending">
+              {{ t('common.save') }}
+            </UiButton>
+          </form>
+
+          <UiBanner v-if="defaultsError" tone="error">{{ defaultsError }}</UiBanner>
+          <UiBanner v-else-if="defaultsMessage" tone="ok">{{ defaultsMessage }}</UiBanner>
+        </div>
+      </UiCard>
+    </div>
+
+    <UiConfirmDialog
+      v-if="confirmingDelete"
+      :title="t('settings.openrouterDelete')"
+      :message="t('settings.openrouterDeleteConfirm')"
+      :confirm-label="t('common.delete')"
+      :pending="keyPending"
+      @confirm="removeOpenRouterKey"
+      @cancel="confirmingDelete = false"
+    />
+  </div>
 </template>
 
 <style scoped>
-.submit {
-  align-self: end;
+/* No gap on the page itself: UiPageHeader carries its own bottom margin. Forms also read
+   better in a column than stretched across a desktop's full width — the tables on the other
+   pages are what --content-max is for. */
+.page {
+  display: flex;
+  flex-direction: column;
+  max-width: 56rem;
+  width: 100%;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.section {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.state {
+  color: var(--text-secondary);
+  max-width: 72ch;
+}
+
+.state.missing {
+  color: var(--warn);
+}
+
+/*
+ * One row of controls that are all the same height: the fields' labels sit above them, so
+ * the row aligns on its baseline edge and the buttons meet the bottom of the inputs. Every
+ * control's height comes from --control-height, so nothing here re-states a pixel value.
+ */
+.control-row {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.grow {
+  flex: 1 1 18rem;
+  min-width: 0;
 }
 </style>

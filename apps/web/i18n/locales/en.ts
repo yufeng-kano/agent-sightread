@@ -2,8 +2,10 @@
 export default {
   app: {
     name: 'agent-sightread',
+    skipToContent: 'Skip to content',
   },
   nav: {
+    primary: 'Main navigation',
     dashboard: 'Usage',
     keys: 'API keys',
     settings: 'Settings',
@@ -18,6 +20,8 @@ export default {
     refresh: 'Refresh',
     save: 'Save',
     delete: 'Delete',
+    cancel: 'Cancel',
+    close: 'Close',
     loading: 'Loading…',
     never: 'Never used',
     notSet: 'Not set',
@@ -65,7 +69,9 @@ export default {
     columnCost: 'Cost',
     columnPrompt: 'Prompt',
     columnCompletion: 'Completion',
+    columnShare: 'Share of the highest cost in this table',
     empty: 'No usage recorded yet.',
+    emptyBody: 'Parse a document and its cost and tokens appear here, per day and per model.',
   },
   keys: {
     headTitle: 'API keys',
@@ -78,9 +84,12 @@ export default {
     columnPrefix: 'Key',
     columnCreated: 'Created',
     columnLastUsed: 'Last used',
-    revoke: 'Revoke this key',
+    revoke: 'Revoke',
+    revokeKey: 'Revoke {name}',
+    revokeTitle: 'Revoke API key',
     revokeConfirm: 'Revoke the key “{name}”? Requests using it stop working immediately.',
     empty: 'No API keys yet.',
+    emptyBody: 'A key authorizes /v1 requests and the MCP connector. Create one to start parsing.',
     usageNote: 'Send a key as Authorization: Bearer on /v1 requests.',
     mcpTitle: 'Claude connector',
     mcpBody:
@@ -111,9 +120,10 @@ export default {
     columnModel: 'Model',
     columnCreated: 'Created',
     columnPages: 'Pages',
-    showResult: 'Show result JSON',
-    hideResult: 'Hide result JSON',
+    result: 'Result JSON',
+    showResultFor: 'Show result JSON for {name}',
     empty: 'No parse jobs yet.',
+    emptyBody: 'Every document parsed over the API or the connector is listed here.',
     status: {
       queued: 'Queued',
       running: 'Running',

@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { createKey, listKeys, revokeKey, type CreatedApiKey } from '~/lib/api'
+import { createKey, listKeys, revokeKey, type ApiKeySummary, type CreatedApiKey } from '~/lib/api'
 import { formatDateTime } from '~/lib/format'
+import type { TableColumn } from '~/lib/table'
 
 definePageMeta({ middleware: 'authed' })
 
@@ -12,15 +13,32 @@ const { resolve } = useApiError()
 
 const newKeyName = ref('')
 const creating = ref(false)
+const showCreate = ref(false)
 const mutationError = ref<string | null>(null)
 const createdKey = ref<CreatedApiKey | null>(null)
-const revokingId = ref<number | null>(null)
+/** The key the confirm dialog is asking about — revoking is irreversible. */
+const revokeTarget = ref<ApiKeySummary | null>(null)
+const revoking = ref(false)
 
 // The connector URL is this deployment's own origin; Caddy routes /mcp to the API.
 const mcpUrl = ref('https://<host>/mcp')
 onMounted(() => {
   mcpUrl.value = `${window.location.origin}/mcp`
 })
+
+const columns = computed<TableColumn<ApiKeySummary>[]>(() => [
+  { key: 'name', header: t('keys.columnName') },
+  { key: 'prefix', header: t('keys.columnPrefix') },
+  { key: 'created', header: t('keys.columnCreated'), hideOnMobile: true },
+  { key: 'lastUsed', header: t('keys.columnLastUsed') },
+  { key: 'revoke', header: '', srHeader: t('keys.revoke'), align: 'end', width: '104px' },
+])
+
+function openCreate() {
+  newKeyName.value = ''
+  mutationError.value = null
+  showCreate.value = true
+}
 
 async function submitCreate() {
   const name = newKeyName.value.trim()
@@ -32,6 +50,7 @@ async function submitCreate() {
   try {
     createdKey.value = await createKey(name)
     newKeyName.value = ''
+    showCreate.value = false
     await refresh()
   } catch (error) {
     mutationError.value = await resolve(error)
@@ -40,132 +59,216 @@ async function submitCreate() {
   }
 }
 
-async function revoke(id: number, name: string) {
-  if (!window.confirm(t('keys.revokeConfirm', { name }))) {
+async function confirmRevoke() {
+  const target = revokeTarget.value
+  if (!target || revoking.value) {
     return
   }
-  revokingId.value = id
+  revoking.value = true
   mutationError.value = null
   try {
-    await revokeKey(id)
-    if (createdKey.value?.id === id) {
+    await revokeKey(target.id)
+    if (createdKey.value?.id === target.id) {
       createdKey.value = null
     }
+    revokeTarget.value = null
     await refresh()
   } catch (error) {
     mutationError.value = await resolve(error)
   } finally {
-    revokingId.value = null
+    revoking.value = false
   }
 }
 </script>
 
 <template>
-  <main class="page">
-    <section>
-      <div class="section-head">
-        <h2>{{ t('keys.listTitle') }}</h2>
-        <RefreshButton :busy="pending" @click="refresh" />
-      </div>
-
-      <form class="row" @submit.prevent="submitCreate">
-        <div class="field">
-          <label for="key-name">{{ t('keys.nameLabel') }}</label>
-          <input id="key-name" v-model="newKeyName" type="text" maxlength="255" required>
-        </div>
-        <button class="primary submit" type="submit" :disabled="creating || !newKeyName.trim()">
+  <div class="page">
+    <UiPageHeader :title="t('keys.headTitle')">
+      <template #actions>
+        <UiButton
+          variant="ghost"
+          icon-only
+          :label="t('common.refresh')"
+          :loading="pending"
+          @click="refresh"
+        >
+          <template #icon><UiIcon name="refresh" /></template>
+        </UiButton>
+        <UiButton variant="primary" @click="openCreate">
+          <template #icon><UiIcon name="plus" /></template>
           {{ t('keys.create') }}
-        </button>
-      </form>
+        </UiButton>
+      </template>
+    </UiPageHeader>
 
-      <div v-if="createdKey" class="notice notice-warning">
-        <div class="row created">
-          <code class="mono">{{ createdKey.key }}</code>
-          <CopyButton :text="createdKey.key" />
+    <div class="stack">
+      <!-- The plaintext key exists on exactly one screen, once. It is the loudest block on the
+           page for as long as it is there, and it is dismissed by the user rather than by the
+           next navigation quietly taking it away. -->
+      <UiBanner v-if="createdKey" tone="warn">
+        <div class="reveal">
+          <p class="reveal-title">{{ t('keys.createdTitle') }}</p>
+          <code class="reveal-key mono">{{ createdKey.key }}</code>
+          <p>{{ t('keys.createdWarning') }}</p>
         </div>
-        <p>{{ t('keys.createdWarning') }}</p>
-      </div>
+        <template #actions>
+          <UiCopyButton :text="createdKey.key" variant="secondary" />
+          <UiButton
+            variant="ghost"
+            icon-only
+            :label="t('common.close')"
+            @click="createdKey = null"
+          >
+            <template #icon><UiIcon name="close" /></template>
+          </UiButton>
+        </template>
+      </UiBanner>
 
-      <p class="muted">{{ t('keys.usageNote') }}</p>
+      <UiBanner v-if="mutationError" tone="error">{{ mutationError }}</UiBanner>
+      <UiBanner v-if="errorMessage" tone="error">{{ errorMessage }}</UiBanner>
 
-      <p v-if="mutationError" class="error">{{ mutationError }}</p>
-      <p v-if="errorMessage" class="error">{{ errorMessage }}</p>
-      <p v-else-if="!data" class="muted">{{ t('common.loading') }}</p>
-      <p v-else-if="!data.keys.length" class="empty">{{ t('keys.empty') }}</p>
-      <div v-else class="table-scroll">
-        <table>
-          <thead>
-            <tr>
-              <th>{{ t('keys.columnName') }}</th>
-              <th>{{ t('keys.columnPrefix') }}</th>
-              <th>{{ t('keys.columnCreated') }}</th>
-              <th>{{ t('keys.columnLastUsed') }}</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="key in data.keys" :key="key.id">
-              <td>{{ key.name }}</td>
-              <td class="mono">{{ key.prefix }}</td>
-              <td>{{ formatDateTime(key.created_at, locale) }}</td>
-              <td>
-                <span v-if="key.last_used_at">{{ formatDateTime(key.last_used_at, locale) }}</span>
-                <span v-else class="muted">{{ t('common.never') }}</span>
-              </td>
-              <td class="numeric">
-                <button
-                  class="icon danger"
-                  type="button"
-                  :disabled="revokingId === key.id"
-                  :title="t('keys.revoke')"
-                  :aria-label="t('keys.revoke')"
-                  @click="revoke(key.id, key.name)"
-                >
-                  <svg
-                    viewBox="0 0 24 24"
-                    width="17"
-                    height="17"
-                    aria-hidden="true"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="1.7"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <path d="M4 7h16" />
-                    <path d="M10 11v6M14 11v6" />
-                    <path d="M6 7l1 13h10l1-13" />
-                    <path d="M9 7V4h6v3" />
-                  </svg>
-                </button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
+      <!-- A failed refresh keeps the rows it already has; the banner above says what went
+           wrong. -->
+      <UiCard
+        v-if="data || !errorMessage"
+        :title="t('keys.listTitle')"
+        flush
+        body-max="var(--group-max)"
+      >
+        <template v-if="data" #heading>
+          <UiBadge>{{ data.keys.length }}</UiBadge>
+        </template>
 
-    <section>
-      <div class="section-head">
-        <h2>{{ t('keys.mcpTitle') }}</h2>
-        <CopyButton :text="mcpUrl" />
-      </div>
-      <pre>{{ mcpUrl }}</pre>
-      <p class="muted">{{ t('keys.mcpBody') }}</p>
-    </section>
-  </main>
+        <UiSkeleton v-if="!data" />
+
+        <!-- No action here: Create key is in the sticky header, present at every scroll depth
+             and in every state of the page. -->
+        <UiEmptyState
+          v-else-if="!data.keys.length"
+          :title="t('keys.empty')"
+          :body="t('keys.emptyBody')"
+        />
+
+        <UiDataTable
+          v-else
+          :columns="columns"
+          :rows="data.keys"
+          :row-key="(key) => String(key.id)"
+          :caption="t('keys.listTitle')"
+        >
+          <template #cell-name="{ row }">{{ row.name }}</template>
+          <template #cell-prefix="{ row }">
+            <code class="mono">{{ row.prefix }}</code>
+          </template>
+          <template #cell-created="{ row }">{{ formatDateTime(row.created_at, locale) }}</template>
+          <template #cell-lastUsed="{ row }">
+            <span v-if="row.last_used_at">{{ formatDateTime(row.last_used_at, locale) }}</span>
+            <span v-else class="never">{{ t('common.never') }}</span>
+          </template>
+          <!-- Revoke keeps its word rather than becoming a glyph: it destroys a credential the
+               user would have to re-issue and re-deploy, and a bare icon makes them hover to
+               find out which one does that. -->
+          <template #cell-revoke="{ row }">
+            <UiButton
+              variant="danger"
+              size="sm"
+              :label="t('keys.revokeKey', { name: row.name })"
+              @click="revokeTarget = row"
+            >
+              {{ t('keys.revoke') }}
+            </UiButton>
+          </template>
+        </UiDataTable>
+      </UiCard>
+
+      <UiCard :title="t('keys.mcpTitle')">
+        <div class="connect">
+          <UiCopyField :value="mcpUrl" />
+          <p class="connect-note">{{ t('keys.mcpBody') }}</p>
+          <p class="connect-note">{{ t('keys.usageNote') }}</p>
+        </div>
+      </UiCard>
+    </div>
+
+    <UiModal v-if="showCreate" :title="t('keys.create')" @close="showCreate = false">
+      <form id="create-key" @submit.prevent="submitCreate">
+        <UiField v-slot="{ id }" :label="t('keys.nameLabel')">
+          <UiTextInput :id="id" v-model="newKeyName" :maxlength="255" required />
+        </UiField>
+      </form>
+      <template #footer>
+        <UiButton variant="ghost" :disabled="creating" @click="showCreate = false">
+          {{ t('common.cancel') }}
+        </UiButton>
+        <UiButton
+          variant="primary"
+          type="submit"
+          form="create-key"
+          :loading="creating"
+          :disabled="!newKeyName.trim()"
+        >
+          {{ t('keys.create') }}
+        </UiButton>
+      </template>
+    </UiModal>
+
+    <UiConfirmDialog
+      v-if="revokeTarget"
+      :title="t('keys.revokeTitle')"
+      :message="t('keys.revokeConfirm', { name: revokeTarget.name })"
+      :confirm-label="t('keys.revoke')"
+      :pending="revoking"
+      @confirm="confirmRevoke"
+      @cancel="revokeTarget = null"
+    />
+  </div>
 </template>
 
 <style scoped>
-.submit {
-  align-self: end;
+/* No gap on the page itself: UiPageHeader carries its own bottom margin, and a second
+   spacer under it would double the distance on every page. */
+.page {
+  display: flex;
+  flex-direction: column;
 }
 
-.created code {
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.reveal {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.reveal-title {
+  font-weight: var(--weight-semibold);
+}
+
+.reveal-key {
+  /* A key has no spaces to break at, and it must be readable in full: this is the only
+     place it will ever be shown. */
   overflow-wrap: anywhere;
+  font-size: var(--text-sm);
+  color: var(--text);
 }
 
-.created {
-  align-items: center;
+.never {
+  color: var(--faint);
+}
+
+.connect {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.connect-note {
+  color: var(--muted);
+  font-size: var(--text-sm);
+  max-width: 72ch;
+  overflow-wrap: anywhere;
 }
 </style>

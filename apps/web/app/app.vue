@@ -9,6 +9,9 @@ useHead(() => ({
 </script>
 
 <template>
-  <AppHeader />
-  <NuxtPage />
+  <!-- Two shells: `layouts/default` is the signed-in fixed frame, `layouts/public` the
+       landing's scrolling document (docs/web.md § Pages). -->
+  <NuxtLayout>
+    <NuxtPage />
+  </NuxtLayout>
 </template>

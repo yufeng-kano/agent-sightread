@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { devLogin, isDevLoginAvailable } from '~/lib/api'
 
+definePageMeta({ layout: 'public' })
+
 const { t } = useI18n()
 const localePath = useLocalePath()
 const auth = useAuth()
@@ -30,6 +32,13 @@ const curlExample = computed(
 )
 const mcpUrl = computed(() => `https://${host.value}/mcp`)
 
+const steps = computed(() => [
+  t('landing.step1'),
+  t('landing.step2'),
+  t('landing.step3'),
+  t('landing.step4'),
+])
+
 onMounted(async () => {
   host.value = window.location.host
   await auth.ensureLoaded()
@@ -54,91 +63,177 @@ async function signInAsDeveloper() {
 </script>
 
 <template>
-  <main class="page">
-    <section>
+  <main class="landing">
+    <section class="hero">
       <h1>{{ t('landing.heroTitle') }}</h1>
-      <p>{{ t('landing.heroBody') }}</p>
-      <div class="row actions">
-        <NuxtLink v-if="auth.signedIn.value" class="cta" :to="localePath('/dashboard')">
+      <p class="lede">{{ t('landing.heroBody') }}</p>
+
+      <!-- The page's one call to action. The shell's bar carries none, so this is the only
+           place it is asked. -->
+      <div class="cta">
+        <UiButton v-if="auth.signedIn.value" variant="primary" :to="localePath('/dashboard')">
           {{ t('landing.openDashboard') }}
-        </NuxtLink>
-        <a v-else class="cta" href="/api/auth/login">{{ t('nav.signIn') }}</a>
-        <button v-if="devLoginAvailable" type="button" :disabled="signingIn" @click="signInAsDeveloper">
-          {{ t('landing.devSignIn') }}
-        </button>
-        <span v-if="devLoginAvailable" class="muted dev-note">{{ t('landing.devSignInNote') }}</span>
+        </UiButton>
+        <UiButton v-else variant="primary" href="/api/auth/login">
+          {{ t('nav.signIn') }}
+        </UiButton>
+
+        <template v-if="devLoginAvailable">
+          <UiButton :loading="signingIn" @click="signInAsDeveloper">
+            {{ t('landing.devSignIn') }}
+          </UiButton>
+          <span class="dev-note">{{ t('landing.devSignInNote') }}</span>
+        </template>
       </div>
-      <p v-if="devLoginError" class="error">{{ devLoginError }}</p>
+
+      <UiBanner v-if="devLoginError" tone="error">{{ devLoginError }}</UiBanner>
     </section>
 
     <section>
       <h2 class="section-head">{{ t('landing.howTitle') }}</h2>
-      <ol>
-        <li>{{ t('landing.step1') }}</li>
-        <li>{{ t('landing.step2') }}</li>
-        <li>{{ t('landing.step3') }}</li>
-        <li>{{ t('landing.step4') }}</li>
+      <ol class="steps">
+        <li v-for="step in steps" :key="step">{{ step }}</li>
       </ol>
     </section>
 
     <section>
       <div class="section-head">
         <h2>{{ t('landing.curlTitle') }}</h2>
-        <CopyButton :text="curlExample" />
+        <UiCopyButton :text="curlExample" />
       </div>
-      <pre>{{ curlExample }}</pre>
-      <p class="muted">{{ t('landing.curlNote') }}</p>
+      <pre class="code mono">{{ curlExample }}</pre>
+      <p class="note">{{ t('landing.curlNote') }}</p>
     </section>
 
     <section>
       <div class="section-head">
         <h2>{{ t('landing.mcpTitle') }}</h2>
-        <CopyButton :text="mcpUrl" />
+        <UiCopyButton :text="mcpUrl" />
       </div>
-      <pre>{{ mcpUrl }}</pre>
-      <p class="muted">{{ t('landing.mcpBody') }}</p>
+      <pre class="code mono">{{ mcpUrl }}</pre>
+      <p class="note">{{ t('landing.mcpBody') }}</p>
     </section>
 
     <section>
       <h2 class="section-head">{{ t('landing.resultTitle') }}</h2>
-      <p>{{ t('landing.resultBody') }}</p>
+      <p class="body">{{ t('landing.resultBody') }}</p>
     </section>
   </main>
 </template>
 
 <style scoped>
-h1 {
-  max-width: 34ch;
+/*
+ * A reading measure, not the app's table width: this page is prose. It shares the app's
+ * tokens and nothing else — no cards, no page header, no frame.
+ */
+.landing {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-10);
+  max-width: 56rem;
+  margin: 0 auto;
+  padding: var(--space-12) var(--space-5) calc(var(--space-12) * 2);
 }
 
-p {
-  max-width: 68ch;
+section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
 }
 
-.actions {
-  align-items: center;
-  margin-top: 0.5rem;
+.hero {
+  gap: var(--space-5);
+}
+
+.hero h1 {
+  max-width: 24ch;
+  font-size: var(--text-2xl);
+  letter-spacing: var(--tracking-tighter);
+  line-height: 1.2;
+}
+
+.lede {
+  max-width: 64ch;
+  font-size: var(--text-md);
+  line-height: 1.6;
+  color: var(--text-secondary);
 }
 
 .cta {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  height: var(--control-height);
-  padding: 0 0.9rem;
-  border-radius: var(--radius);
-  background: var(--accent);
-  color: var(--accent-fg);
-  font-weight: 500;
-  text-decoration: none;
+  flex-wrap: wrap;
+  gap: var(--space-3);
 }
 
+/* Set to be read rather than shrunk and greyed: it is the one thing that explains why a
+   second sign-in button is on the page at all. */
 .dev-note {
-  font-size: 0.9rem;
+  color: var(--muted);
+  font-size: var(--text-sm);
 }
 
-ol {
+/* A rule under the heading divides the sections — the plainest thing that carries the
+   division, and the reason none of them needs a box. */
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: var(--control-height);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.section-head h2 {
+  font-size: var(--text-md);
+}
+
+.steps {
+  display: grid;
+  gap: var(--space-2);
+  max-width: 64ch;
   margin: 0;
-  padding-inline-start: 1.2rem;
-  max-width: 68ch;
+  padding-inline-start: 1.4em;
+  color: var(--text-secondary);
+}
+
+.body {
+  max-width: 64ch;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.note {
+  max-width: 64ch;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+}
+
+.code {
+  margin: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.7;
+  /* A command line must not be re-wrapped into something that no longer runs, so it scrolls
+     in its own box rather than making the page scroll sideways. */
+  overflow-x: auto;
+  white-space: pre;
+}
+
+@media (max-width: 640px) {
+  .landing {
+    gap: var(--space-8);
+    padding: var(--space-8) var(--space-4) var(--space-12);
+  }
+
+  .hero h1 {
+    font-size: var(--text-xl);
+  }
 }
 </style>
