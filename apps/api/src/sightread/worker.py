@@ -1,0 +1,93 @@
+"""`python -m sightread.worker` — the process that drains the job queue (docs/jobs.md).
+
+Same codebase and same image as the API, run as its own process. One job at a time per
+worker: concurrency inside a job comes from the page fan-out, and concurrency across jobs
+comes from running more workers, which the FIFO `SKIP LOCKED` claim already supports.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import logging
+import os
+import signal
+from pathlib import Path
+
+from sqlalchemy.exc import SQLAlchemyError
+
+from .config import get_settings
+from .db.session import create_engine, create_sessionmaker
+from .jobs.queue import claim_next_job, requeue_job
+from .jobs.runner import run_job
+from .jobs.sweeper import sweep_forever
+
+logger = logging.getLogger(__name__)
+
+# How long an idle worker waits before asking the queue again.
+IDLE_POLL_SECONDS = 2.0
+
+
+def render_worker_count(configured: int) -> int:
+    """`RENDER_WORKERS=0` means "CPU count", resolved here (docs/deployment.md)."""
+    return configured if configured > 0 else (os.cpu_count() or 1)
+
+
+async def run_worker(stop: asyncio.Event) -> None:
+    settings = get_settings()
+    engine = create_engine(settings.database_url)
+    sessionmaker = create_sessionmaker(engine)
+    render_count = render_worker_count(settings.render_workers)
+    render_slots = asyncio.Semaphore(render_count)
+    upload_dir = Path(settings.upload_dir)
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    sweeper = asyncio.create_task(sweep_forever(upload_dir, stop))
+    logger.info("worker started; %d render slots", render_count)
+
+    try:
+        while not stop.is_set():
+            try:
+                async with sessionmaker() as db:
+                    job_id = await claim_next_job(db, settings.max_jobs_per_user)
+            except SQLAlchemyError:
+                # A database blip must not end the worker; wait and ask again.
+                logger.exception("could not claim a job")
+                job_id = None
+
+            if job_id is None:
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(stop.wait(), timeout=IDLE_POLL_SECONDS)
+                continue
+
+            logger.info("running job %s", job_id)
+            running = asyncio.create_task(run_job(sessionmaker, settings, job_id, render_slots))
+            shutdown = asyncio.create_task(stop.wait())
+            done, _ = await asyncio.wait({running, shutdown}, return_when=asyncio.FIRST_COMPLETED)
+            shutdown.cancel()
+
+            if running not in done:
+                # Shutting down mid-run: hand the job back to the queue rather than
+                # leaving it stuck in `running` (docs/jobs.md § Retention covers the file).
+                running.cancel()
+                await asyncio.gather(running, return_exceptions=True)
+                async with sessionmaker() as db:
+                    await requeue_job(db, job_id)
+                logger.info("requeued job %s on shutdown", job_id)
+    finally:
+        sweeper.cancel()
+        await asyncio.gather(sweeper, return_exceptions=True)
+        await engine.dispose()
+
+
+async def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for signal_name in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(signal_name, stop.set)
+    await run_worker(stop)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
