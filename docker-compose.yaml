@@ -1,0 +1,42 @@
+# Local full stack (docs/deployment.md). Plain HTTP, ports exposed on localhost.
+# `worker` and `web` join this file when those phases land.
+
+services:
+  pg:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-sightread}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sightread}
+      POSTGRES_DB: ${POSTGRES_DB:-sightread}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sightread} -d ${POSTGRES_DB:-sightread}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ./apps/api
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      UPLOAD_DIR: /data/uploads
+    depends_on:
+      pg:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - uploads:/data/uploads
+    command: >
+      sh -c "alembic upgrade head &&
+      uvicorn sightread.main:app --host 0.0.0.0 --port 8000"
+
+volumes:
+  pgdata:
+  uploads:
