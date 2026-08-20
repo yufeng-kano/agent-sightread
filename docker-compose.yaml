@@ -1,5 +1,4 @@
 # Local full stack (docs/deployment.md). Plain HTTP, ports exposed on localhost.
-# `web` joins this file when that phase lands.
 
 services:
   pg:
@@ -53,6 +52,18 @@ services:
     volumes:
       - uploads:/data/uploads
     command: ["python", "-m", "sightread.worker"]
+
+  web:
+    build:
+      context: ./apps/web
+    depends_on:
+      - api
+    ports:
+      - "127.0.0.1:3000:3000"
+    # The web app only ever calls the API on its own origin. Production gets that from
+    # Caddy; here the two are separate ports, so the signed-in pages of this container
+    # cannot reach the API — use `pnpm dev` (its proxy reproduces the split) for those,
+    # and this service for checking the built image (docs/deployment.md).
 
 volumes:
   pgdata:

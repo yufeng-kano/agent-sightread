@@ -32,3 +32,10 @@ Same, `media_type: image/*` (jpg/png/webp/heic), single page.
 3. Tool calls arrive with the OAuth bearer; usage lands in the same `usage_log` as REST calls.
 
 Keep tool descriptions short and explicit about the coordinate contract (`bbox_format`, `sightread://` placeholders, "you crop, we don't").
+
+## Implementation notes (as built)
+
+- **Stateless streamable HTTP.** Every request carries its own bearer and gets its own transport, so a connector never depends on session affinity and a token can never be inherited from an earlier session. The SDK's session manager runs for the app's lifetime (FastAPI lifespan).
+- **Auth is ours, not the SDK's.** A small ASGI guard in front of the transport resolves the bearer through the same code path as `/v1` and answers 401 with `WWW-Authenticate: Bearer resource_metadata="<APP_URL>/.well-known/oauth-protected-resource"` — the pointer that starts a connector's OAuth discovery (RFC 9728).
+- **`parse_document` / `parse_image`** take `source` (base64), `media_type`, and the same optional `model` / `profile` / `pages` / `force` as `POST /v1/parse`; they run `jobs.intake`, report MCP progress from `jobs.events`, and return the `GET /v1/jobs/{id}/result` payload (a dedup hit returns it immediately with `meta.cached: true`). A `source` that looks like a filesystem path is refused by name.
+- **`get_result`** returns `{job_id, status, page_count, pages_done, error, result}` — `result` is null until the job is terminal.

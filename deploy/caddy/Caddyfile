@@ -1,0 +1,42 @@
+# Production routing and TLS (docs/deployment.md). DOMAIN and ACME_EMAIL come from the
+# environment of the caddy service in docker-compose.production.yaml.
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	# Keep in sync with UPLOAD_MAX_BYTES (docs/api.md § Limits): the app enforces the same
+	# cap while streaming, this stops an oversized body before it reaches Python.
+	request_body {
+		max_size 128MB
+	}
+
+	# Everything the FastAPI app owns: the data plane, the control plane, the OAuth
+	# authorization server, its discovery documents, and the MCP endpoint. The ACME
+	# challenge also lives under /.well-known/, but Caddy answers that itself on :80
+	# before any route here is consulted.
+	@api path /v1/* /api/* /oauth/* /mcp /mcp/* /.well-known/*
+	handle @api {
+		reverse_proxy api:8000 {
+			# Uploads and SSE go straight through: no response buffering, and long idle
+			# gaps are normal on a progress stream (keepalives are 10 s apart).
+			flush_interval -1
+			transport http {
+				read_timeout 30m
+				write_timeout 30m
+				dial_timeout 10s
+			}
+		}
+	}
+
+	# Everything else is the Nuxt app.
+	handle {
+		reverse_proxy web:3000
+	}
+
+	log {
+		output stdout
+	}
+}

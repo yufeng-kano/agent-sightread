@@ -1,0 +1,128 @@
+# Production stack (docs/deployment.md). Standalone — never merged with the local file:
+#
+#   docker compose -f docker-compose.production.yaml up -d --build
+#
+# Caddy is the only service with published ports; api, worker, web and pg are reachable
+# on the compose network alone. Secrets come from `.env` next to this file.
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      # Both are read by the Caddyfile; see the production block of .env.example.
+      DOMAIN: ${DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+    volumes:
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+      - web
+
+  pg:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-sightread}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:-sightread}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sightread} -d ${POSTGRES_DB:-sightread}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ./apps/api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      APP_ENV: production
+      UPLOAD_DIR: /data/uploads
+    depends_on:
+      pg:
+        condition: service_healthy
+    volumes:
+      - uploads:/data/uploads
+    # Migrations run once, from the api container, before it serves (docs/database.md).
+    command: >
+      sh -c "alembic upgrade head &&
+      uvicorn sightread.main:app --host 0.0.0.0 --port 8000"
+
+  worker:
+    build:
+      context: ./apps/api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      APP_ENV: production
+      UPLOAD_DIR: /data/uploads
+    depends_on:
+      pg:
+        condition: service_healthy
+      api:
+        condition: service_started
+    volumes:
+      - uploads:/data/uploads
+    command: ["python", "-m", "sightread.worker"]
+
+  web:
+    build:
+      context: ./apps/web
+    restart: unless-stopped
+    depends_on:
+      - api
+
+  backup:
+    # Leaving a managed platform means backups are ours (docs/deployment.md). One dump a
+    # day into ./backups, keeping the newest seven. Deliberately a visible shell loop:
+    # a cron container would hide the schedule and the rotation in two more places.
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      PGUSER: ${POSTGRES_USER:-sightread}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      PGDATABASE: ${POSTGRES_DB:-sightread}
+      PGHOST: pg
+    volumes:
+      - ./backups:/backups
+    depends_on:
+      pg:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        while true; do
+          stamp=$$(date -u +%Y%m%dT%H%M%SZ)
+          if pg_dump --format=custom --file="/backups/sightread-$$stamp.dump.tmp"; then
+            mv "/backups/sightread-$$stamp.dump.tmp" "/backups/sightread-$$stamp.dump"
+            echo "backup: wrote sightread-$$stamp.dump"
+          else
+            rm -f "/backups/sightread-$$stamp.dump.tmp"
+            echo "backup: pg_dump failed at $$stamp" >&2
+          fi
+          # Keep the newest seven dumps; anything older is deleted.
+          ls -1t /backups/sightread-*.dump 2>/dev/null | tail -n +8 | while read -r old; do
+            rm -f "$$old"
+            echo "backup: rotated out $$old"
+          done
+          sleep 86400
+        done
+
+volumes:
+  pgdata:
+  uploads:
+  caddy_data:
+  caddy_config:

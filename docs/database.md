@@ -28,8 +28,10 @@ usage_log        id PK, user_id FK, job_id FK, model, prompt_tokens,
                  INDEX (user_id, created_at)
 oauth_clients    client_id PK, client_name, redirect_uris JSONB, created_at
 oauth_grants     id PK, client_id FK, user_id FK, kind code|access|refresh,
-                 token_hash UNIQUE, pkce_challenge NULL, scope, expires_at,
-                 revoked_at NULL, created_at
+                 token_hash UNIQUE, pkce_challenge NULL, redirect_uri NULL,
+                 scope, expires_at, revoked_at NULL, created_at
+                 -- redirect_uri is set on `code` rows only: the token endpoint
+                 -- checks a code came back from the URI it was issued for
 ```
 
 ## Rules
