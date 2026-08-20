@@ -11,7 +11,8 @@ from ..config import Settings
 from ..db.models import User
 from ..db.session import db_session
 from ..errors import ApiError
-from .api_keys import resolve_api_key
+from .api_keys import KEY_PREFIX, resolve_api_key
+from .oauth_as import resolve_access_token
 from .sessions import SESSION_COOKIE, resolve_session
 
 DbSession = Annotated[AsyncSession, Depends(db_session)]
@@ -36,31 +37,49 @@ async def require_session_user(request: Request, db: DbSession) -> User:
 SessionUser = Annotated[User, Depends(require_session_user)]
 
 
-async def require_api_key_user(request: Request, db: DbSession) -> User:
-    """Data plane auth: `Authorization: Bearer sr_...`."""
+async def resolve_bearer(db: AsyncSession, credential: str) -> User | None:
+    """A bearer credential is either a project API key or an OAuth access token.
+
+    Both resolve to the same `User` and carry the same rights: the connector path and the
+    scripting path differ only in how the credential was obtained (docs/auth.md).
+    """
+    if credential.startswith(KEY_PREFIX):
+        return await resolve_api_key(db, credential)
+    return await resolve_access_token(db, credential)
+
+
+def bearer_credential(request: Request) -> str | None:
     header = request.headers.get("authorization", "")
     scheme, _, credential = header.partition(" ")
-    if scheme.lower() != "bearer" or not credential:
+    if scheme.lower() != "bearer" or not credential.strip():
+        return None
+    return credential.strip()
+
+
+async def require_bearer_user(request: Request, db: DbSession) -> User:
+    """Data plane auth: `Authorization: Bearer <API key | OAuth access token>`."""
+    credential = bearer_credential(request)
+    if credential is None:
         raise ApiError(
             401,
             "auth",
             "Missing bearer token",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    user = await resolve_api_key(db, credential.strip())
+    user = await resolve_bearer(db, credential)
     if user is None:
-        raise ApiError(401, "auth", "Invalid or revoked API key")
+        raise ApiError(401, "auth", "Invalid, expired or revoked credential")
     return user
 
 
-ApiKeyUser = Annotated[User, Depends(require_api_key_user)]
+BearerUser = Annotated[User, Depends(require_bearer_user)]
 
 
 async def require_reader_user(request: Request, db: DbSession) -> User:
     """`GET /v1/models` and `/v1/profiles` are safe reads the web app also calls, so they
     accept either a session cookie or an API key (docs/web.md)."""
     if request.headers.get("authorization"):
-        return await require_api_key_user(request, db)
+        return await require_bearer_user(request, db)
     return await require_session_user(request, db)
 
 

@@ -18,7 +18,7 @@ from sqlalchemy import delete, func, select
 from ..auth.api_keys import create_api_key
 from ..auth.crypto import encrypt_openrouter_key, mask_openrouter_key
 from ..auth.deps import AppSettings, CsrfGuard, DbSession, SessionUser
-from ..auth.oidc import DEV_USER_EMAIL, DEV_USER_SUB, upsert_user
+from ..auth.oidc import DEV_USER_EMAIL, DEV_USER_SUB, POST_LOGIN_KEY, upsert_user
 from ..auth.sessions import SESSION_COOKIE, SESSION_TTL, create_session, delete_session
 from ..db.models import ApiKey, Job, OpenRouterKey, Result, UsageLog, UserSettings, utcnow
 from ..errors import ApiError
@@ -76,7 +76,11 @@ async def callback(request: Request, db: DbSession, settings: AppSettings):
     session_token = await create_session(db, user)
     await db.commit()
 
-    response = RedirectResponse(settings.web_url, status_code=status.HTTP_302_FOUND)
+    # A connector flow parks the authorize request that sent the user here; only a path on
+    # this origin is honoured, so a parked value can never become an open redirect.
+    parked = request.session.pop(POST_LOGIN_KEY, "")
+    destination = parked if parked.startswith("/oauth/authorize") else settings.web_url
+    response = RedirectResponse(destination, status_code=status.HTTP_302_FOUND)
     set_session_cookie(response, session_token)
     return response
 

@@ -242,6 +242,9 @@ class OAuthGrant(Base):
     kind: Mapped[str] = mapped_column(String(16))  # code | access | refresh
     token_hash: Mapped[str] = mapped_column(String(64), unique=True)
     pkce_challenge: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # Set on `code` rows only: the token endpoint must check the code came back from the
+    # same redirect URI the authorization request used (RFC 6749 § 4.1.3).
+    redirect_uri: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     scope: Mapped[str] = mapped_column(String(255), default="")
     expires_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ)
     revoked_at: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ, nullable=True)

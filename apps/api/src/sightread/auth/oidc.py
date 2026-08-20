@@ -18,6 +18,10 @@ GOOGLE_METADATA_URL = "https://accounts.google.com/.well-known/openid-configurat
 DEV_USER_EMAIL = "dev@localhost"
 DEV_USER_SUB = "dev-local"
 
+# Key in the transient signed cookie holding the request to resume after sign-in. Set by
+# `/oauth/authorize` when a connector flow needs a web session first (docs/auth.md § 4).
+POST_LOGIN_KEY = "post_login_path"
+
 
 def build_oauth(settings: Settings) -> OAuth:
     oauth = OAuth()
