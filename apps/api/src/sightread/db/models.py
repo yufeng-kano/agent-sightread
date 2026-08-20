@@ -1,0 +1,248 @@
+"""SQLAlchemy models — the schema described in docs/database.md.
+
+All timestamps are `timestamptz` holding UTC. JSON payload columns are `JSONB` on
+PostgreSQL (the only supported production database) with a plain `JSON` variant so the
+test suite can also run against SQLite when no PostgreSQL is available.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, datetime
+from decimal import Decimal
+
+from sqlalchemy import (
+    JSON,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    LargeBinary,
+    Numeric,
+    String,
+    Text,
+    Uuid,
+    text,
+)
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.types import TypeDecorator
+
+JSON_COLUMN = JSONB().with_variant(JSON(), "sqlite")
+
+
+class UtcDateTime(TypeDecorator):
+    """`timestamptz` that always hands Python an aware UTC datetime.
+
+    PostgreSQL already does this; the decorator keeps the SQLite test fallback honest,
+    since SQLite drops the offset and would otherwise return naive datetimes.
+    """
+
+    impl = DateTime(timezone=True)
+    cache_ok = True
+
+    def process_bind_param(self, value: datetime | None, dialect) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            raise ValueError("naive datetime written to a timestamptz column")
+        return value.astimezone(UTC)
+
+    def process_result_value(self, value: datetime | None, dialect) -> datetime | None:
+        if value is None:
+            return None
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+TIMESTAMPTZ = UtcDateTime()
+
+
+def utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    google_sub: Mapped[str] = mapped_column(String(255), unique=True)
+    email: Mapped[str] = mapped_column(String(320))
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, default=utcnow)
+
+    settings: Mapped[UserSettings | None] = relationship(back_populates="user", lazy="selectin")
+    openrouter_key: Mapped[OpenRouterKey | None] = relationship(
+        back_populates="user", lazy="selectin"
+    )
+
+
+class UserSession(Base):
+    """A web session row; `token_hash` is the SHA-256 of the cookie value."""
+
+    __tablename__ = "sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ)
+
+
+class ApiKey(Base):
+    __tablename__ = "api_keys"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    key_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    prefix: Mapped[str] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, default=utcnow)
+    last_used_at: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ, nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ, nullable=True)
+
+
+class OpenRouterKey(Base):
+    """One per user. AES-256-GCM ciphertext only — never a plaintext key (docs/auth.md)."""
+
+    __tablename__ = "openrouter_keys"
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+    masked: Mapped[str] = mapped_column(String(64))
+    updated_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, default=utcnow, onupdate=utcnow)
+
+    user: Mapped[User] = relationship(back_populates="openrouter_key")
+
+
+class UserSettings(Base):
+    __tablename__ = "user_settings"
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    default_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    default_profile: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    user: Mapped[User] = relationship(back_populates="settings")
+
+
+class Job(Base):
+    __tablename__ = "jobs"
+    __table_args__ = (
+        # Queue claim: FIFO over queued rows (docs/jobs.md).
+        Index("ix_jobs_status_created_at", "status", "created_at"),
+        # Dedup cache lookup, per user, succeeded jobs only (docs/jobs.md § Dedup).
+        Index(
+            "ix_jobs_dedup",
+            "user_id",
+            "sha256",
+            "model",
+            "profile",
+            "profile_version",
+            "pages_spec",
+            "pipeline_version",
+            postgresql_where=text("status = 'succeeded'"),
+            sqlite_where=text("status = 'succeeded'"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(16))  # pdf | image
+    filename: Mapped[str] = mapped_column(String(512))
+    media_type: Mapped[str] = mapped_column(String(128))
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    sha256: Mapped[str] = mapped_column(String(64))
+    pages_spec: Mapped[str] = mapped_column(String(255), default="")  # "" means all pages
+    model: Mapped[str] = mapped_column(String(255))
+    profile: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    profile_version: Mapped[int] = mapped_column(Integer, default=0)
+    pipeline_version: Mapped[int] = mapped_column(Integer, default=0)
+    bbox_format: Mapped[str] = mapped_column(String(32))
+    status: Mapped[str] = mapped_column(String(16))  # queued | running | succeeded | failed
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pages_done: Mapped[int] = mapped_column(Integer, default=0)
+    source_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    source_deleted_at: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, default=utcnow)
+    started_at: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ, nullable=True)
+
+
+class JobPage(Base):
+    __tablename__ = "job_pages"
+
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("jobs.id", ondelete="CASCADE"), primary_key=True
+    )
+    page_no: Mapped[int] = mapped_column(Integer, primary_key=True)
+    method: Mapped[str | None] = mapped_column(String(16), nullable=True)  # text_layer | vision
+    status: Mapped[str] = mapped_column(String(16))
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class Result(Base):
+    """Parsed output, kept indefinitely; document bytes are never stored (docs/database.md)."""
+
+    __tablename__ = "results"
+
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("jobs.id", ondelete="CASCADE"), primary_key=True
+    )
+    markdown: Mapped[str] = mapped_column(Text)
+    pages: Mapped[list] = mapped_column(JSON_COLUMN, default=list)
+    figures: Mapped[list] = mapped_column(JSON_COLUMN, default=list)
+    errors: Mapped[list] = mapped_column(JSON_COLUMN, default=list)
+    meta: Mapped[dict] = mapped_column(JSON_COLUMN, default=dict)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, default=utcnow)
+
+
+class UsageLog(Base):
+    __tablename__ = "usage_log"
+    __table_args__ = (Index("ix_usage_log_user_created", "user_id", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    job_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True
+    )
+    model: Mapped[str] = mapped_column(String(255))
+    prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cost: Mapped[Decimal] = mapped_column(Numeric(12, 6), default=Decimal("0"))
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, default=utcnow)
+
+
+class OAuthClient(Base):
+    """Dynamically registered Claude Connector clients (docs/auth.md § OAuth AS)."""
+
+    __tablename__ = "oauth_clients"
+
+    client_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    client_name: Mapped[str] = mapped_column(String(255))
+    redirect_uris: Mapped[list] = mapped_column(JSON_COLUMN, default=list)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, default=utcnow)
+
+
+class OAuthGrant(Base):
+    __tablename__ = "oauth_grants"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    client_id: Mapped[str] = mapped_column(
+        ForeignKey("oauth_clients.client_id", ondelete="CASCADE")
+    )
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    kind: Mapped[str] = mapped_column(String(16))  # code | access | refresh
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    pkce_challenge: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    scope: Mapped[str] = mapped_column(String(255), default="")
+    expires_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ)
+    revoked_at: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, default=utcnow)
