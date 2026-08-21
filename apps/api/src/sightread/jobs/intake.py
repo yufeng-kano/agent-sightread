@@ -25,7 +25,7 @@ from ..db.models import Job, Result, UploadTicket, User
 from ..errors import ApiError
 from ..parsing import poppler
 from ..parsing.images import ACCEPTED_IMAGE_TYPES, ImageError, probe_image
-from ..parsing.profiles import BBOX_FORMAT_YXYX, get_profile
+from ..parsing.profiles import BBOX_FORMAT_YXYX, get_profile, transcription_prompt_template
 from ..upstream.openrouter import fetch_image_models
 from .queue import (
     count_running_jobs,
@@ -76,13 +76,15 @@ def resolve_kind(filename: str, media_type: str) -> tuple[str, str]:
 
 async def resolve_target(
     user: User, model: str | None, profile_id: str | None
-) -> tuple[str, str | None, int, str]:
-    """Model, profile, profile version and bbox format for this job.
+) -> tuple[str, str | None, int, str, str]:
+    """Model, profile, profile version, bbox format and prompt template for this job.
 
     A preset profile resolves its model from the live catalog. A raw model id runs the
-    default prompts and is untested by us (docs/parsing.md § Profiles).
+    default prompt and is untested by us. The user's custom system prompt, when stored,
+    replaces the template in every case (docs/parsing.md § Prompts).
     """
     settings_row = user.settings
+    custom_prompt = settings_row.system_prompt if settings_row else None
     if not model and not profile_id:
         profile_id = settings_row.default_profile if settings_row else None
         model = settings_row.default_model if settings_row else None
@@ -96,10 +98,12 @@ async def resolve_target(
         resolved = profile.resolve_model(await fetch_image_models())
         if resolved is None:
             raise ApiError(503, "upstream", f"Profile '{profile_id}' has no available model")
-        return resolved, profile.id, profile.profile_version, profile.bbox_format
+        prompt = custom_prompt or profile.prompt_template
+        return resolved, profile.id, profile.profile_version, profile.bbox_format, prompt
 
     if model:
-        return model, None, 0, BBOX_FORMAT_YXYX
+        prompt = custom_prompt or transcription_prompt_template(None)
+        return model, None, 0, BBOX_FORMAT_YXYX, prompt
 
     raise ApiError(
         400, "invalid_request", "No model configured: pass 'model' or 'profile', or set a default"
@@ -167,9 +171,10 @@ async def submit_parse(
     here (413, 400, 429) costs the caller its one upload (docs/auth.md § 5).
     """
     kind, media_type = resolve_kind(filename, media_type)
-    target_model, target_profile, profile_version, bbox_format = await resolve_target(
+    target_model, target_profile, profile_version, bbox_format, prompt = await resolve_target(
         user, model, profile_id
     )
+    prompt_sha256 = hashlib.sha256(prompt.encode()).hexdigest()
 
     if await count_running_jobs(db, user.id) >= settings.max_jobs_per_user:
         raise ApiError(
@@ -202,6 +207,7 @@ async def submit_parse(
             profile=target_profile,
             profile_version=profile_version,
             pages_spec=pages_spec,
+            prompt_sha256=prompt_sha256,
         )
         result = (
             None
@@ -210,6 +216,10 @@ async def submit_parse(
                 await db.execute(select(Result).where(Result.job_id == cached.id))
             ).scalar_one_or_none()
         )
+        if result is not None and result.errors:
+            # A degraded result (failed pages) answers its own job, never a new upload —
+            # a transient upstream failure must not be replayed forever (docs/jobs.md).
+            result = None
         if result is not None:
             # The cache already holds this exact parse; the fresh copy is dead weight.
             stored.unlink(missing_ok=True)
@@ -231,6 +241,8 @@ async def submit_parse(
         profile=target_profile,
         profile_version=profile_version,
         bbox_format=bbox_format,
+        prompt=prompt,
+        prompt_sha256=prompt_sha256,
         page_count=page_count,
         source_path=str(stored),
     )

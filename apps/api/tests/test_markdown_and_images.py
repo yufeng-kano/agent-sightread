@@ -6,12 +6,7 @@ import pytest
 from PIL import Image
 
 from sightread.parsing.images import MAX_LONG_EDGE_PX, ImageError, normalize_image, probe_image
-from sightread.parsing.markdown import (
-    FigureBox,
-    PageMarkdown,
-    assemble,
-    clean_bbox,
-)
+from sightread.parsing.markdown import PageMarkdown, assemble, clean_bbox
 
 
 def test_clean_bbox_clamps_and_rejects() -> None:
@@ -85,25 +80,16 @@ def test_out_of_range_boxes_are_clamped_not_dropped() -> None:
     assert document.figures[0]["bbox"] == [0, 0, 1000, 1000]
 
 
-def test_text_layer_figures_are_appended_with_their_caption() -> None:
+def test_every_page_gets_a_marker_and_empty_pages_get_none() -> None:
     document = assemble(
         [
-            PageMarkdown(
-                page=4,
-                markdown="Body text from the PDF text layer.",
-                figures=[
-                    FigureBox(bbox=(100, 100, 200, 200), caption="Figure 4: appended"),
-                    FigureBox(bbox=(5, 5, 4, 4)),
-                ],
-            )
+            PageMarkdown(page=1, markdown="First page."),
+            PageMarkdown(page=2, markdown=""),
+            PageMarkdown(page=3, markdown="Third page."),
         ]
     )
 
-    assert document.dropped_figures == 1
-    assert document.markdown.endswith("![fig1](sightread://p4/100,100,200,200)\nFigure 4: appended")
-    assert document.figures == [
-        {"id": "fig1", "page": 4, "bbox": [100, 100, 200, 200], "caption": "Figure 4: appended"}
-    ]
+    assert document.markdown == "<!-- page: 1 -->\nFirst page.\n\n<!-- page: 3 -->\nThird page."
 
 
 def test_image_normalization_downscales_and_keeps_original_dimensions(documents, tmp_path) -> None:

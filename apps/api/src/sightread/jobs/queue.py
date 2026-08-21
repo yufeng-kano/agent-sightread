@@ -97,8 +97,9 @@ async def find_cached_job(
     profile: str | None,
     profile_version: int,
     pages_spec: str,
+    prompt_sha256: str,
 ) -> Job | None:
-    """The dedup lookup: same user, same bytes, same model/profile/pages/pipeline."""
+    """The dedup lookup: same user, same bytes, same model/profile/pages/prompt/pipeline."""
     return (
         await db.execute(
             select(Job)
@@ -109,6 +110,7 @@ async def find_cached_job(
                 Job.profile.is_(profile) if profile is None else Job.profile == profile,
                 Job.profile_version == profile_version,
                 Job.pages_spec == pages_spec,
+                Job.prompt_sha256 == prompt_sha256,
                 Job.pipeline_version == PIPELINE_VERSION,
                 Job.status == "succeeded",
             )
@@ -132,6 +134,8 @@ async def enqueue_job(
     profile: str | None,
     profile_version: int,
     bbox_format: str,
+    prompt: str,
+    prompt_sha256: str,
     page_count: int,
     source_path: str,
 ) -> Job:
@@ -150,6 +154,8 @@ async def enqueue_job(
         profile_version=profile_version,
         pipeline_version=PIPELINE_VERSION,
         bbox_format=bbox_format,
+        prompt=prompt,
+        prompt_sha256=prompt_sha256,
         status="queued",
         page_count=page_count,
         pages_done=0,

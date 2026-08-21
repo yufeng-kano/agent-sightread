@@ -7,7 +7,6 @@ Key material is never logged and never appears in raised messages.
 from __future__ import annotations
 
 import base64
-import json
 import re
 import time
 from dataclasses import dataclass
@@ -21,7 +20,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..auth.crypto import decrypt_openrouter_key
 from ..db.models import OpenRouterKey
 from ..errors import ApiError
-from ..parsing.markdown import FigureBox, clean_bbox
 
 BASE_URL = "https://openrouter.ai/api/v1"
 MODELS_URL = f"{BASE_URL}/models"
@@ -147,14 +145,6 @@ class PageTranscription:
     usage: Usage
 
 
-@dataclass(frozen=True)
-class FigureDetection:
-    figures: list[FigureBox]
-    # Detections the model returned in an unusable shape; reported, never guessed at.
-    dropped: int
-    usage: Usage
-
-
 async def load_user_key(db: AsyncSession, secret_key: str, user_id: int) -> UserKey | None:
     row = (
         await db.execute(select(OpenRouterKey).where(OpenRouterKey.user_id == user_id))
@@ -264,49 +254,11 @@ async def transcribe_page(
     image: Path,
     page_no: int,
 ) -> PageTranscription:
-    """Transcribe one rendered page; the answer carries its own figure placeholders."""
-    prompt = prompt_template.format(page=page_no, bbox_format=bbox_format)
+    """Transcribe one rendered page; the answer carries its own figure placeholders.
+
+    Token substitution is plain replacement, not `str.format`: a user-supplied template
+    with stray braces must never break the call (docs/parsing.md § Prompts).
+    """
+    prompt = prompt_template.replace("{page}", str(page_no)).replace("{bbox_format}", bbox_format)
     text, usage = await _chat_with_image(key, model, prompt, image)
     return PageTranscription(markdown=_CODE_FENCE_RE.sub("", text.strip()), usage=usage)
-
-
-async def detect_figures(
-    key: UserKey,
-    model: str,
-    prompt_template: str,
-    bbox_format: str,
-    image: Path,
-) -> FigureDetection:
-    """Figure boxes for a page whose text came from the PDF text layer."""
-    prompt = prompt_template.format(bbox_format=bbox_format)
-    text, usage = await _chat_with_image(key, model, prompt, image)
-
-    stripped = _CODE_FENCE_RE.sub("", text.strip())
-    start, end = stripped.find("["), stripped.rfind("]")
-    if start < 0 or end <= start:
-        # A model that answers in prose has told us nothing usable, but nothing wrong.
-        return FigureDetection(figures=[], dropped=0, usage=usage)
-    try:
-        items = json.loads(stripped[start : end + 1])
-    except json.JSONDecodeError:
-        return FigureDetection(figures=[], dropped=1, usage=usage)
-
-    figures: list[FigureBox] = []
-    dropped = 0
-    for item in items if isinstance(items, list) else []:
-        raw = item.get("bbox") if isinstance(item, dict) else None
-        if not isinstance(raw, list) or len(raw) != 4:
-            dropped += 1
-            continue
-        try:
-            bbox = clean_bbox(tuple(int(value) for value in raw))  # type: ignore[arg-type]
-        except (TypeError, ValueError):
-            bbox = None
-        if bbox is None:
-            dropped += 1
-            continue
-        caption = item.get("caption")
-        figures.append(
-            FigureBox(bbox=bbox, caption=caption.strip() if isinstance(caption, str) else "")
-        )
-    return FigureDetection(figures=figures, dropped=dropped, usage=usage)

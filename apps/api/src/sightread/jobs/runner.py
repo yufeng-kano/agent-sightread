@@ -24,22 +24,16 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ..config import Settings
 from ..db.models import Job, JobPage, Result, UsageLog, utcnow
-from ..parsing import poppler, route
+from ..parsing import poppler
 from ..parsing.images import ImageError, normalize_image
-from ..parsing.markdown import FigureBox, PageMarkdown, assemble, text_layer_markdown
-from ..parsing.profiles import (
-    BBOX_FORMAT_YXYX,
-    DEFAULT_FIGURE_PROMPT_TEMPLATE,
-    DEFAULT_PROMPT_TEMPLATE,
-    get_profile,
-)
+from ..parsing.markdown import PageMarkdown, assemble
+from ..parsing.profiles import transcription_prompt_template
 from ..upstream.openrouter import (
     PaymentRequired,
     RateLimited,
     UpstreamError,
     Usage,
     UserKey,
-    detect_figures,
     load_user_key,
     transcribe_page,
 )
@@ -93,6 +87,10 @@ class VisionBudget:
             self._limit = max(1, self._limit // 2)
 
 
+# The one conversion method (docs/parsing.md § Vision-only conversion).
+VISION = "vision"
+
+
 @dataclass
 class PageOutcome:
     page: int
@@ -101,9 +99,7 @@ class PageOutcome:
     method: str | None = None
     error: str | None = None
     markdown: str = ""
-    figures: list[FigureBox] = field(default_factory=list)
     usage: list[Usage] = field(default_factory=list)
-    dropped_figures: int = 0
 
 
 @dataclass
@@ -125,16 +121,13 @@ def result_payload(result: Result) -> dict:
     }
 
 
-def prompt_templates(profile_id: str | None) -> tuple[str, str, str]:
-    """Transcription prompt, figure prompt and bbox format for a job.
+def job_prompt(job: Job) -> str:
+    """The transcription prompt template this job runs.
 
-    A raw model that matches no preset runs the default templates and is untested by us —
-    bbox quality is then the user's own call (docs/parsing.md § Profiles).
+    The effective template is stored on the row at enqueue time (docs/parsing.md §
+    Prompts); jobs from before that column exist resolve their profile's template again.
     """
-    profile = get_profile(profile_id) if profile_id else None
-    if profile is None:
-        return DEFAULT_PROMPT_TEMPLATE, DEFAULT_FIGURE_PROMPT_TEMPLATE, BBOX_FORMAT_YXYX
-    return profile.prompt_template, profile.figure_prompt_template, profile.bbox_format
+    return job.prompt or transcription_prompt_template(job.profile)
 
 
 async def _call_upstream(state: RunState, call):
@@ -195,48 +188,29 @@ async def _process_pdf_page(
     render_slots: asyncio.Semaphore,
 ) -> PageOutcome:
     size = info.page_size(page_no)
-    outcome = PageOutcome(page=page_no, width_pt=size.width_pt, height_pt=size.height_pt)
-    transcribe_prompt, figure_prompt, bbox_format = prompt_templates(job.profile)
-
-    try:
-        async with render_slots:
-            text_layer = await poppler.page_text(source, page_no, cwd=work_dir)
-    except poppler.PopplerError:
-        outcome.error = "text extraction failed"
-        return outcome
-
-    decision = route.route_page(text_layer)
-    outcome.method = decision.method
+    outcome = PageOutcome(
+        page=page_no, width_pt=size.width_pt, height_pt=size.height_pt, method=VISION
+    )
 
     try:
         async with render_slots:
             image = await poppler.render_page(source, page_no, size, cwd=work_dir)
-    except poppler.PopplerError:
+    except poppler.PopplerError as exc:
+        # The Poppler detail is diagnostic (its stderr), never document content.
+        logger.warning("job %s page %d render failed: %s", job.id, page_no, exc)
         outcome.error = "render failed"
         return outcome
 
     try:
-        if decision.method == route.TEXT_LAYER:
-            outcome.markdown = text_layer_markdown(text_layer)
-            # Figure boxes always come from vision, even when the text did not.
-            detection = await _guarded_call(
-                state,
-                outcome,
-                lambda: detect_figures(key, job.model, figure_prompt, bbox_format, image),
-            )
-            if detection is not None:
-                outcome.figures = detection.figures
-                outcome.dropped_figures = detection.dropped
-        else:
-            transcription = await _guarded_call(
-                state,
-                outcome,
-                lambda: transcribe_page(
-                    key, job.model, transcribe_prompt, bbox_format, image, page_no
-                ),
-            )
-            if transcription is not None:
-                outcome.markdown = transcription.markdown
+        transcription = await _guarded_call(
+            state,
+            outcome,
+            lambda: transcribe_page(
+                key, job.model, job_prompt(job), job.bbox_format, image, page_no
+            ),
+        )
+        if transcription is not None:
+            outcome.markdown = transcription.markdown
     finally:
         # The rendered page has served its purpose; nothing may outlive the call.
         image.unlink(missing_ok=True)
@@ -246,7 +220,6 @@ async def _process_pdf_page(
 async def _process_image(
     job: Job, state: RunState, key: UserKey, source: Path, work_dir: Path
 ) -> PageOutcome:
-    transcribe_prompt, _, bbox_format = prompt_templates(job.profile)
     try:
         normalized = normalize_image(source, work_dir)
     except ImageError:
@@ -256,14 +229,14 @@ async def _process_image(
         page=1,
         width_pt=float(normalized.width_px),
         height_pt=float(normalized.height_px),
-        method=route.VISION,
+        method=VISION,
     )
     try:
         transcription = await _guarded_call(
             state,
             outcome,
             lambda: transcribe_page(
-                key, job.model, transcribe_prompt, bbox_format, normalized.path, 1
+                key, job.model, job_prompt(job), job.bbox_format, normalized.path, 1
             ),
         )
         if transcription is not None:
@@ -377,22 +350,27 @@ async def run_job(
         shutil.rmtree(work_dir, ignore_errors=True)
 
     if all(outcome.error for outcome in outcomes):
-        # Partial markdown from a document nothing could read is worse than nothing.
-        await _finish(sessionmaker, job_id, status="failed", error="no page could be parsed")
+        # Partial markdown from a document nothing could read is worse than nothing, but
+        # the caller still deserves to know what killed each page.
+        reasons = "; ".join(f"page {o.page}: {o.error}" for o in outcomes[:5])
+        if len(outcomes) > 5:
+            reasons += "; …"
+        await _finish(
+            sessionmaker, job_id, status="failed", error=f"no page could be parsed ({reasons})"
+        )
         return
 
     document = assemble(
         [
-            PageMarkdown(page=outcome.page, markdown=outcome.markdown, figures=outcome.figures)
+            PageMarkdown(page=outcome.page, markdown=outcome.markdown)
             for outcome in outcomes
             if not outcome.error
         ]
     )
-    unusable = document.dropped_figures + sum(outcome.dropped_figures for outcome in outcomes)
-    if unusable:
+    if document.dropped_figures:
         # A count only: how badly the chosen model follows the coordinate contract is worth
         # knowing, what it said about the document is not.
-        logger.info("job %s dropped %d unusable figure boxes", job_id, unusable)
+        logger.info("job %s dropped %d unusable figure boxes", job_id, document.dropped_figures)
     await _finish(
         sessionmaker,
         job_id,
@@ -416,6 +394,7 @@ async def run_job(
                 if outcome.error
             ],
             "meta": {
+                "job_id": str(job.id),
                 "model": job.model,
                 "profile": job.profile,
                 "bbox_format": job.bbox_format,

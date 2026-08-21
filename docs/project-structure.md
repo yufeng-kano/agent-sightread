@@ -10,7 +10,7 @@ agent-sightread/
         db/                   # engine, models, session helpers
         auth/                 # oidc.py, sessions.py, api_keys.py, oauth_as.py, crypto.py
         routes/               # v1.py (data plane), control.py (/api), oauth.py
-        parsing/              # poppler.py (subprocess wrappers), route.py (text_layer vs vision),
+        parsing/              # poppler.py (subprocess wrappers),
                               # images.py (heic/exif/downscale), profiles.py, markdown.py
         upstream/             # openrouter.py (httpx client, usage capture, backoff)
         jobs/                 # queue.py (claim/enqueue), intake.py (store/dedup/enqueue),

@@ -128,6 +128,8 @@ class UserSettings(Base):
     )
     default_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
     default_profile: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Custom transcription prompt; NULL means the shipped default (docs/parsing.md § Prompts).
+    system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     user: Mapped[User] = relationship(back_populates="settings")
 
@@ -146,6 +148,7 @@ class Job(Base):
             "profile",
             "profile_version",
             "pages_spec",
+            "prompt_sha256",
             "pipeline_version",
             postgresql_where=text("status = 'succeeded'"),
             sqlite_where=text("status = 'succeeded'"),
@@ -165,6 +168,9 @@ class Job(Base):
     profile_version: Mapped[int] = mapped_column(Integer, default=0)
     pipeline_version: Mapped[int] = mapped_column(Integer, default=0)
     bbox_format: Mapped[str] = mapped_column(String(32))
+    # The effective prompt template, verbatim; its hash is part of the dedup key.
+    prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    prompt_sha256: Mapped[str] = mapped_column(String(64), default="", server_default="")
     status: Mapped[str] = mapped_column(String(16))  # queued | running | succeeded | failed
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -183,7 +189,7 @@ class JobPage(Base):
         ForeignKey("jobs.id", ondelete="CASCADE"), primary_key=True
     )
     page_no: Mapped[int] = mapped_column(Integer, primary_key=True)
-    method: Mapped[str | None] = mapped_column(String(16), nullable=True)  # text_layer | vision
+    method: Mapped[str | None] = mapped_column(String(16), nullable=True)  # vision
     status: Mapped[str] = mapped_column(String(16))
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
 

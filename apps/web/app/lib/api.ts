@@ -50,6 +50,8 @@ export interface User {
 export interface UserSettings {
   default_model: string | null
   default_profile: string | null
+  /** Custom transcription prompt; null means the shipped default. */
+  system_prompt: string | null
 }
 
 export interface OpenRouterKeyState {
@@ -61,6 +63,8 @@ export interface OpenRouterKeyState {
 export interface MeResponse {
   user: User
   settings: UserSettings
+  /** What "default" means right now — the shipped prompt the backend runs without a custom one. */
+  defaults: { system_prompt: string }
   openrouter_key: OpenRouterKeyState
 }
 
@@ -121,7 +125,7 @@ export interface ResultPage {
   page: number
   width_pt: number
   height_pt: number
-  method: 'text_layer' | 'vision'
+  method: 'vision'
   error: string | null
 }
 
@@ -138,6 +142,8 @@ export interface ResultPageError {
 }
 
 export interface ResultMeta {
+  /** Absent on results stored before the pipeline started writing it. */
+  job_id?: string
   model: string
   profile: string | null
   bbox_format: string
@@ -282,7 +288,8 @@ export function deleteOpenRouterKey(): Promise<void> {
   return request<undefined>('DELETE', '/api/openrouter-key')
 }
 
-export function putSettings(settings: UserSettings): Promise<UserSettings> {
+/** Partial update: only the fields present in the body change (docs/api.md). */
+export function putSettings(settings: Partial<UserSettings>): Promise<UserSettings> {
   return request('PUT', '/api/settings', settings)
 }
 

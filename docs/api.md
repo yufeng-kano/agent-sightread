@@ -42,25 +42,34 @@ The upload is hashed (SHA-256) while streaming to disk; the request must never b
 ```json
 {
   "markdown": "…",
-  "pages":   [ { "page": 1, "width_pt": 612, "height_pt": 792, "method": "text_layer|vision", "error": null } ],
+  "pages":   [ { "page": 1, "width_pt": 612, "height_pt": 792, "method": "vision", "error": null } ],
   "figures": [ { "id": "fig1", "page": 3, "bbox": [120, 60, 480, 940], "caption": "Figure 1: …" } ],
   "errors":  [ { "page": 7, "reason": "render failed" } ],
   "meta": {
+    "job_id": "…",
     "model": "google/gemini-…",
     "profile": "gemini-yxyx",
     "bbox_format": "yxyx_norm1000",
-    "pipeline_version": 1,
+    "pipeline_version": 2,
     "sha256": "…",
     "cached": false
   }
 }
 ```
 
-Figure placeholders in markdown: `![fig1](sightread://p3/120,60,480,940)` with the caption verbatim on the next line. Cropping is the caller's job (add ~2% margin; denormalize `x_px = x/1000 * page_width_px`).
+`markdown` carries a `<!-- page: N -->` marker line before each page's content ([parsing.md](./parsing.md) § Page markers). Figure placeholders in markdown: `![fig1](sightread://p3/120,60,480,940)` with the caption verbatim on the next line. Cropping is the caller's job (add ~2% margin; denormalize `x_px = x/1000 * page_width_px`).
+
+### GET /v1/jobs/{id}/result.md — markdown only
+
+The result's `markdown` string as `text/markdown` — nothing to unwrap, ready to save as a file. Same 404 as `/result` while the job has no result.
+
+### GET /v1/jobs/last* — the upload ticket's own job
+
+`/v1/jobs/last`, `/v1/jobs/last/result` and `/v1/jobs/last/result.md` resolve `last` to the job the presented **upload ticket** is bound to, so a ticket caller (the MCP flow) never needs to extract a job id. Only tickets: a durable credential gets 400 and uses the explicit id routes.
 
 ### GET /v1/jobs/{id}/events — SSE progress
 
-Events: `progress` (`{pages_done, page_count, page, method}` per finished page), then exactly one of `done` (full result payload) / `error`. Reconnectable at any time; a terminal job replays the final event immediately. Keepalive comment every 10 s.
+Events: `progress` (`{job_id, pages_done, page_count, page, method}` per finished page), then exactly one of `done` (full result payload) / `error`. Reconnectable at any time; a terminal job replays the final event immediately. Keepalive comment every 10 s.
 
 ### GET /v1/models
 
@@ -75,10 +84,10 @@ Preset profiles (id, name, model, bbox_format, description).
 | Route | Purpose |
 |-------|---------|
 | `GET /api/auth/login` → Google, `GET /api/auth/callback`, `POST /api/auth/logout` | OIDC flow ([auth.md](./auth.md)) |
-| `GET /api/me` | current user + settings + whether an OpenRouter key is stored (masked, never the value) |
+| `GET /api/me` | current user + settings (incl. `system_prompt`) + the shipped default prompt (`defaults.system_prompt`) + whether an OpenRouter key is stored (masked, never the value) |
 | `GET/POST /api/keys`, `DELETE /api/keys/{id}` | API keys; `POST` returns the created key (with plaintext) exactly once, unwrapped; `GET` wraps as `{keys: []}` |
 | `GET/PUT/DELETE /api/openrouter-key` | read masked form / store (validated against `GET https://openrouter.ai/api/v1/key` before save) / remove |
-| `PUT /api/settings` | default model / profile |
+| `PUT /api/settings` | default model / profile / custom system prompt (partial update: only the fields present in the body change; `system_prompt: null` restores the default prompt) |
 | `GET /api/usage?days=30` | per-day and per-model aggregates of tokens + cost from `usage_log` |
 | `GET /api/jobs?limit=50` | recent jobs (history): `job_id`, `kind`, `filename`, `status`, `model`, `profile`, `page_count`, `pages_done`, `error`, timestamps — no per-job cost (usage is aggregated per day/model only); `GET /api/jobs/{id}/result` same payload as data plane |
 
@@ -86,4 +95,5 @@ Preset profiles (id, name, model, bbox_format, description).
 
 - `UPLOAD_MAX_BYTES` = 134217728 (128 MB) — enforced in the app **and** in Caddy; keep in sync ([deployment.md](./deployment.md)).
 - `PAGE_CAP` = 500, `MAX_JOBS_PER_USER` = 2 concurrent, `VISION_CONCURRENCY_PER_JOB` = 8.
+- `SYSTEM_PROMPT_MAX_CHARS` = 8000 — cap on a custom system prompt.
 - 429 with `Retry-After` when the per-user job cap is hit; upstream 402 (OpenRouter credits exhausted) maps to `payment` and fails only the affected pages.

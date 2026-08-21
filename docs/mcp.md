@@ -22,16 +22,19 @@ Output (JSON): a fresh single-use upload ticket ([auth.md](./auth.md) § 5) plus
   "expires_at": "2026-08-21T15:00:00Z",
   "max_upload_bytes": 134217728,
   "page_cap": 500,
-  "upload": "curl -sN -H 'Authorization: Bearer srt_…' -H 'Accept: text/event-stream' -F file=@doc.pdf https://<host>/v1/parse -o result.sse",
-  "status": "curl -s -H 'Authorization: Bearer srt_…' https://<host>/v1/jobs/<job_id>",
-  "result": "curl -s -H 'Authorization: Bearer srt_…' https://<host>/v1/jobs/<job_id>/result -o result.json",
-  "notes": "…optional form fields, SSE shape, recovery…"
+  "upload": "curl -sN -H 'Authorization: Bearer srt_…' -H 'Accept: text/event-stream' -F file=@doc.pdf https://<host>/v1/parse -o progress.sse",
+  "markdown": "curl -s -H 'Authorization: Bearer srt_…' https://<host>/v1/jobs/last/result.md -o result.md",
+  "metadata": "curl -s -H 'Authorization: Bearer srt_…' https://<host>/v1/jobs/last/result -o result.json",
+  "status": "curl -s -H 'Authorization: Bearer srt_…' https://<host>/v1/jobs/last",
+  "notes": "…optional form fields, page markers, recovery…"
 }
 ```
 
-- The **upload** command is the primary path: one connection covers upload → progress → final result. The stream ends with a `done` event whose `data:` line is the full result payload (`-o` lands it on disk so the agent can read it selectively instead of flooding its context). A dedup hit streams the single `done` event immediately.
-- **status** / **result** are the fallback for a dropped stream or a second look; `<job_id>` comes from the SSE `progress`/`done` events or from a plain (no `Accept`) upload response.
-- `notes` must spell out: optional form fields (`model`, `profile`, `pages` e.g. `1-5,8`, `force`), PDF or image (jpg/png/webp/heic) both go to the same endpoint, and the recovery rule — if the ticket is spent or expired, call `parse` again; re-uploading the same file returns the cached result instantly ([jobs.md](./jobs.md) § Dedup).
+- **upload** then **markdown** is the whole happy path: the upload connection streams progress and closes when the job is terminal; the markdown command then lands the document as a plain `.md` file — no JSON to unwrap. `<!-- page: N -->` markers inside it map every passage to its page.
+- `last` resolves to the job this ticket's upload created ([api.md](./api.md) § GET /v1/jobs/last*), so no command needs a job id filled in. The explicit `/v1/jobs/<job_id>` routes still exist for durable credentials; `job_id` is in every SSE `progress` event and in `meta.job_id`.
+- **metadata** is the structured remainder — `figures`, `pages`, `errors`, `meta` (plus the same markdown) — for coordinate work.
+- **status** answers "is it done / what failed" after a dropped stream.
+- `notes` must spell out: optional form fields (`model`, `profile`, `pages` e.g. `1-5,8`, `force`), PDF or image (jpg/png/webp/heic) both go to the same endpoint, the page markers, and the recovery rule — if the ticket is spent or expired, call `parse` again; re-uploading the same file returns the cached result instantly ([jobs.md](./jobs.md) § Dedup).
 
 Tool description stays short and explicit about the coordinate contract (`bbox_format`, `sightread://` placeholders, "you crop, we don't").
 

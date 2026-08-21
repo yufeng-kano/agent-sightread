@@ -10,16 +10,20 @@ sessions         id PK, user_id FK, token_hash UNIQUE, created_at, expires_at
 api_keys         id PK, user_id FK, name, key_hash UNIQUE, prefix, created_at,
                  last_used_at, revoked_at NULL
 openrouter_keys  user_id PK/FK, ciphertext BYTEA, masked, updated_at        -- one per user
-user_settings    user_id PK/FK, default_model, default_profile
+user_settings    user_id PK/FK, default_model, default_profile,
+                 system_prompt TEXT NULL          -- custom transcription prompt; NULL = default
 jobs             id UUID PK, user_id FK, kind pdf|image, filename, media_type,
                  size_bytes, sha256, pages_spec, model, profile, profile_version,
                  pipeline_version, bbox_format,
+                 prompt TEXT NULL,                -- effective prompt template, verbatim
+                 prompt_sha256,                   -- its hash; part of the dedup key
                  status queued|running|succeeded|failed, error,
                  page_count, pages_done, source_path NULL, source_deleted_at NULL,
                  created_at, started_at, finished_at
                  INDEX (status, created_at)                                  -- queue claim
                  INDEX (user_id, sha256, model, profile, profile_version,
-                        pages_spec, pipeline_version) WHERE status='succeeded' -- dedup
+                        pages_spec, prompt_sha256, pipeline_version)
+                        WHERE status='succeeded'                             -- dedup
 job_pages        (job_id FK, page_no) PK, method NULL, status, error NULL
 results          job_id PK/FK, markdown TEXT, pages JSONB, figures JSONB,
                  errors JSONB, meta JSONB, created_at

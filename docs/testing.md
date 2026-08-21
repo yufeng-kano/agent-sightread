@@ -10,7 +10,7 @@
 - `uv run pytest`. pytest + pytest-asyncio; DB tests against a throwaway Postgres (compose `pg` or testcontainers), each test in a rolled-back transaction where possible.
 - Fixture documents in `tests/fixtures/`: a small text-layer PDF, a scanned-style PDF (rendered-only), a multi-page mix, one corrupt file, tiny jpg/png/webp/heic images. Generate or vendor tiny files — keep fixtures under a few hundred KB each.
 - Poppler is a real dependency of the test environment (CI image installs `poppler-utils`); subprocess wrappers are tested against real fixtures, not mocked.
-- Must-cover: routing heuristic (text_layer vs vision), bbox placeholder emission, dedup key matching + `force`, per-user job cap 429, SKIP LOCKED claim under two concurrent workers, source-file deletion at terminal state, sweeper, key encryption round-trip + masking, OAuth AS happy path (DCR → PKCE → token → `/mcp` auth), 402/429 upstream handling, MCP tools end to end through the official SDK client over ASGI (the app lifespan does not run under `ASGITransport`, so `/mcp` tests start the SDK session manager themselves).
+- Must-cover: bbox placeholder emission, page markers, dedup key matching + `force` + degraded results never served from cache, per-user job cap 429, SKIP LOCKED claim under two concurrent workers, source-file deletion at terminal state, sweeper, key encryption round-trip + masking, OAuth AS happy path (DCR → PKCE → token → `/mcp` auth), 402/429 upstream handling, MCP tools end to end through the official SDK client over ASGI (the app lifespan does not run under `ASGITransport`, so `/mcp` tests start the SDK session manager themselves).
 
 ## Frontend (`apps/web`)
 

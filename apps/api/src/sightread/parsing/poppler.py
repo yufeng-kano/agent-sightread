@@ -9,12 +9,10 @@ from __future__ import annotations
 
 import asyncio
 import re
-import xml.etree.ElementTree as ElementTree
 from dataclasses import dataclass
 from pathlib import Path
 
 PDFINFO = "pdfinfo"
-PDFTOTEXT = "pdftotext"
 PDFTOPPM = "pdftoppm"
 
 # Per-call ceiling (docs/parsing.md: default 60 s/page).
@@ -28,8 +26,6 @@ MAX_RENDER_DPI = 300
 # `pdfinfo -f 1 -l N` prints one size line per page. The upper bound only caps how many
 # size lines we ask for; `page_count` still comes from the document's own "Pages:" line.
 PAGE_SIZE_LIST_LIMIT = 100_000
-
-XHTML = "{http://www.w3.org/1999/xhtml}"
 
 _PAGES_RE = re.compile(r"^Pages:\s+(\d+)$", re.MULTILINE)
 _PAGE_SIZE_RE = re.compile(r"^Page\s+(\d+) size:\s+([\d.]+) x ([\d.]+) pts", re.MULTILINE)
@@ -59,25 +55,6 @@ class PdfInfo:
         if 1 <= page_no <= len(self.page_sizes):
             return self.page_sizes[page_no - 1]
         return self.page_sizes[0]
-
-
-@dataclass(frozen=True)
-class Word:
-    text: str
-    x_min: float
-    y_min: float
-    x_max: float
-    y_max: float
-
-
-@dataclass(frozen=True)
-class PageText:
-    """The text layer of one page, in PDF points with a top-left origin."""
-
-    page_no: int
-    width_pt: float
-    height_pt: float
-    words: tuple[Word, ...]
 
 
 async def _run(args: list[str], *, cwd: Path, timeout: float) -> bytes:
@@ -134,45 +111,6 @@ async def pdf_info(
     if not sizes:
         raise PopplerError("pdfinfo reported no page dimensions")
     return PdfInfo(page_count=page_count, page_sizes=tuple(sizes))
-
-
-async def page_text(
-    pdf_path: Path, page_no: int, *, cwd: Path, timeout: float = DEFAULT_TIMEOUT_SECONDS
-) -> PageText:
-    """The `pdftotext -bbox` text layer of one page: word boxes in points, top-left origin."""
-    stdout = await _run(
-        [PDFTOTEXT, "-q", "-bbox", "-f", str(page_no), "-l", str(page_no), str(pdf_path), "-"],
-        cwd=cwd,
-        timeout=timeout,
-    )
-    try:
-        # Poppler generates this XHTML itself and ElementTree resolves no external
-        # entities, so the document cannot reach outside its own subprocess output.
-        root = ElementTree.fromstring(stdout)  # noqa: S314
-    except ElementTree.ParseError as exc:
-        raise PopplerError("pdftotext produced unparsable output") from exc
-
-    page = root.find(f".//{XHTML}page")
-    if page is None:
-        raise PopplerError(f"pdftotext returned no page {page_no}")
-
-    words = tuple(
-        Word(
-            text=(element.text or "").strip(),
-            x_min=float(element.get("xMin", 0.0)),
-            y_min=float(element.get("yMin", 0.0)),
-            x_max=float(element.get("xMax", 0.0)),
-            y_max=float(element.get("yMax", 0.0)),
-        )
-        for element in page.findall(f"{XHTML}word")
-        if (element.text or "").strip()
-    )
-    return PageText(
-        page_no=page_no,
-        width_pt=float(page.get("width", 0.0)),
-        height_pt=float(page.get("height", 0.0)),
-        words=words,
-    )
 
 
 def render_dpi(size: PageSize) -> int:

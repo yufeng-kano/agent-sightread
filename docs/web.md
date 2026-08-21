@@ -14,7 +14,7 @@ Nuxt (latest stable) + TypeScript + `@nuxtjs/i18n` (en, zh-TW; en is the source 
 | `/dashboard` | client-side, authed | usage: cost + tokens per day and per model (`GET /api/usage`) |
 | `/keys` | client-side, authed | API key list/create/revoke; plaintext shown once; REST usage (curl with `Authorization: Bearer`) |
 | `/connect` | client-side, authed | Claude MCP connector: endpoint URL + the one sentence that matters (OAuth, no key to paste) |
-| `/settings` | client-side, authed | OpenRouter key (masked, save validates upstream); parsing default as **one** dropdown of preset profiles (model + bbox format pairs from `GET /v1/profiles`) plus an "add custom model" dialog picking any image-input model from `GET /v1/models` (runs default prompts, `profile: null`); selection saves on change |
+| `/settings` | client-side, authed | OpenRouter key (masked, save validates upstream); parsing default as **one** dropdown of preset profiles (model + bbox format pairs from `GET /v1/profiles`) plus an "add custom model" dialog picking any image-input model from `GET /v1/models` (runs the default prompt, `profile: null`); selection saves on change; system prompt editor prefilled with the custom prompt or the shipped default (`/api/me` `defaults.system_prompt`) — saving text identical to the default stores `null`, so default improvements keep applying |
 | `/jobs` | client-side, authed | parse history: filename, status, model, pages, expandable raw result JSON (per-job cost not exposed yet — usage aggregates only) |
 
 ## Design system (as built)

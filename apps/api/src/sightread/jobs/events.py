@@ -139,6 +139,7 @@ async def iter_job_events(
                 yield (
                     PROGRESS,
                     {
+                        "job_id": str(job.id),
                         "pages_done": job.pages_done,
                         "page_count": job.page_count,
                         "page": page.page_no,

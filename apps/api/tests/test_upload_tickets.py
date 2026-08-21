@@ -74,6 +74,43 @@ async def test_a_ticket_uploads_once_and_binds_to_the_job_it_created(
     assert ticket.spent_at is not None
 
 
+@respx.mock
+async def test_last_resolves_a_spent_ticket_to_its_own_job(
+    api_client, sessionmaker, documents
+) -> None:
+    """The `last` aliases behind the MCP curl commands (docs/api.md § GET /v1/jobs/last*)."""
+    respx.post(CHAT_URL).mock(side_effect=_openrouter_stub)
+    token = await _mint(api_client, sessionmaker)
+    job_id = (await _upload(api_client, token, documents["text_pdf"])).json()["job_id"]
+    await _drain_queue(api_client, sessionmaker)
+
+    status = await api_client.get("/v1/jobs/last", headers=_bearer(token))
+    assert status.status_code == 200
+    assert status.json() == {**status.json(), "job_id": job_id, "status": "succeeded"}
+
+    result = await api_client.get("/v1/jobs/last/result", headers=_bearer(token))
+    assert result.status_code == 200
+    assert result.json()["meta"]["job_id"] == job_id
+
+    markdown = await api_client.get("/v1/jobs/last/result.md", headers=_bearer(token))
+    assert markdown.status_code == 200
+    assert markdown.headers["content-type"].startswith("text/markdown")
+    assert markdown.text.startswith("<!-- page: 1 -->\n")
+
+    # A durable credential has its job id and gets told to use it.
+    refused = await api_client.get("/v1/jobs/last")
+    assert refused.status_code == 400
+
+
+async def test_last_with_an_unspent_ticket_is_the_documented_401(
+    api_client, sessionmaker
+) -> None:
+    token = await _mint(api_client, sessionmaker)
+    response = await api_client.get("/v1/jobs/last", headers=_bearer(token))
+    assert response.status_code == 401
+    assert response.json()["error"]["message"] == EXPECTED_REJECTION
+
+
 async def test_a_spent_ticket_cannot_upload_again(api_client, sessionmaker, documents) -> None:
     token = await _mint(api_client, sessionmaker)
     assert (await _upload(api_client, token, documents["text_pdf"])).status_code == 202

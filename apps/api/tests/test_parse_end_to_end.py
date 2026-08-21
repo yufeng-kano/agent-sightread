@@ -26,7 +26,6 @@ from tests.conftest import CSRF_HEADERS, DATABASE_URL, TEST_SECRET_KEY
 from tests.test_jobs_queue import postgres_only
 
 MODEL = "vendor/vision-model"
-FIGURE_JSON = json.dumps([{"bbox": [120, 60, 480, 940], "caption": "Figure 1: the chart"}])
 VISION_MARKDOWN = (
     "## Scanned page\n\n"
     "![fig](sightread://p9/200,100,600,900)\n"
@@ -46,10 +45,7 @@ def _completion(content: str) -> httpx.Response:
 
 
 def _openrouter_stub(request: httpx.Request) -> httpx.Response:
-    """Answer as a transcription or a figure detection, depending on the prompt sent."""
-    prompt = json.loads(request.content)["messages"][0]["content"][0]["text"]
-    if "JSON array" in prompt:
-        return _completion(FIGURE_JSON)
+    """Every page is a vision transcription (docs/parsing.md § Vision-only conversion)."""
     return _completion(VISION_MARKDOWN)
 
 
@@ -112,30 +108,31 @@ async def test_parse_a_mixed_pdf_end_to_end(api_client, sessionmaker, documents)
     assert (status["page_count"], status["pages_done"]) == (3, 3)
 
     result = (await api_client.get(f"/v1/jobs/{job_id}/result")).json()
-    methods = [page["method"] for page in result["pages"]]
-    assert methods == ["text_layer", "vision", "vision"]
+    assert [page["method"] for page in result["pages"]] == ["vision", "vision", "vision"]
     assert [page["page"] for page in result["pages"]] == [1, 2, 3]
     assert result["pages"][0]["width_pt"] == 612.0
     assert result["errors"] == []
 
-    # Figures: one appended to the text-layer page, one inline from each vision page.
+    # One inline figure per page, renumbered document-wide.
     assert [figure["id"] for figure in result["figures"]] == ["fig1", "fig2", "fig3"]
     assert result["figures"][0] == {
         "id": "fig1",
         "page": 1,
-        "bbox": [120, 60, 480, 940],
-        "caption": "Figure 1: the chart",
+        "bbox": [200, 100, 600, 900],
+        "caption": "Figure 2: the photograph",
     }
     # The page number in a placeholder is ours, not the model's claim of "p9".
     assert "![fig2](sightread://p2/200,100,600,900)" in result["markdown"]
-    assert "Figure 2: the photograph" in result["markdown"]
-    assert "the quick brown fox" in result["markdown"]
+    # Every page's content sits behind its marker.
+    for page_no in (1, 2, 3):
+        assert f"<!-- page: {page_no} -->" in result["markdown"]
 
     assert result["meta"] == {
+        "job_id": job_id,
         "model": MODEL,
         "profile": None,
         "bbox_format": "yxyx_norm1000",
-        "pipeline_version": 1,
+        "pipeline_version": 2,
         "sha256": result["meta"]["sha256"],
         "cached": False,
     }
@@ -148,7 +145,7 @@ async def test_parse_a_mixed_pdf_end_to_end(api_client, sessionmaker, documents)
         usage = (
             (await db.execute(select(UsageLog).where(UsageLog.job_id == job.id))).scalars().all()
         )
-    # One upstream call per page: figure detection for the text page, transcription twice.
+    # One transcription call per page.
     assert len(usage) == 3
     assert {row.model for row in usage} == {MODEL}
     assert sum(row.prompt_tokens for row in usage) == 2700
@@ -212,7 +209,7 @@ async def test_second_identical_upload_is_served_from_the_cache(
 async def test_a_page_that_cannot_be_transcribed_fails_alone(
     api_client, sessionmaker, documents
 ) -> None:
-    responses = [httpx.Response(500), _completion(FIGURE_JSON)]
+    responses = [httpx.Response(500), _completion(VISION_MARKDOWN)]
     respx.post(CHAT_URL).mock(side_effect=responses)
 
     accepted = await _upload(api_client, documents["mixed_pdf"], pages="1,2")
@@ -224,6 +221,84 @@ async def test_a_page_that_cannot_be_transcribed_fails_alone(
     assert len(reasons) == 1
     assert "upstream call failed" in reasons.values()
     assert result["markdown"]
+
+
+@respx.mock
+async def test_a_degraded_result_is_never_served_from_the_cache(
+    api_client, sessionmaker, documents
+) -> None:
+    respx.post(CHAT_URL).mock(side_effect=[httpx.Response(500), _completion(VISION_MARKDOWN)])
+    await _upload(api_client, documents["mixed_pdf"], pages="1,2")
+    await _drain_queue(api_client, sessionmaker)
+
+    # The same upload again: the stored result carries a failed page, so no cache hit.
+    respx.post(CHAT_URL).mock(side_effect=_openrouter_stub)
+    retried = await _upload(api_client, documents["mixed_pdf"], pages="1,2")
+    assert retried.status_code == 202
+    await _drain_queue(api_client, sessionmaker)
+
+    complete = (await api_client.get(f"/v1/jobs/{retried.json()['job_id']}/result")).json()
+    assert complete["errors"] == []
+
+    # Now that a complete result exists, the cache answers.
+    cached = await _upload(api_client, documents["mixed_pdf"], pages="1,2")
+    assert cached.status_code == 200
+    assert cached.json()["meta"]["cached"] is True
+
+
+@respx.mock
+async def test_a_wholly_failed_job_names_the_page_reasons(
+    api_client, sessionmaker, documents
+) -> None:
+    respx.post(CHAT_URL).mock(return_value=httpx.Response(500))
+
+    accepted = await _upload(api_client, documents["text_pdf"])
+    job_id = accepted.json()["job_id"]
+    await _drain_queue(api_client, sessionmaker)
+
+    status = (await api_client.get(f"/v1/jobs/{job_id}")).json()
+    assert status["status"] == "failed"
+    assert status["error"] == "no page could be parsed (page 1: upstream call failed)"
+
+
+@respx.mock
+async def test_result_md_serves_the_markdown_as_a_file(
+    api_client, sessionmaker, documents
+) -> None:
+    respx.post(CHAT_URL).mock(side_effect=_openrouter_stub)
+    accepted = await _upload(api_client, documents["text_pdf"])
+    job_id = accepted.json()["job_id"]
+    await _drain_queue(api_client, sessionmaker)
+
+    response = await api_client.get(f"/v1/jobs/{job_id}/result.md")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/markdown")
+    assert response.text.startswith("<!-- page: 1 -->\n")
+
+
+@respx.mock
+async def test_a_custom_system_prompt_is_sent_and_keyed_into_the_cache(
+    api_client, sessionmaker, documents
+) -> None:
+    route = respx.post(CHAT_URL).mock(side_effect=_openrouter_stub)
+    prompts = await api_client.put(
+        "/api/settings",
+        json={"system_prompt": "Only tables from page {page}."},
+        headers=CSRF_HEADERS,
+    )
+    assert prompts.json()["system_prompt"] == "Only tables from page {page}."
+
+    await _upload(api_client, documents["text_pdf"])
+    await _drain_queue(api_client, sessionmaker)
+    sent = json.loads(route.calls[0].request.content)["messages"][0]["content"][0]["text"]
+    assert sent == "Only tables from page 1."
+
+    # Same bytes, same model — but a different prompt is a different parse.
+    await api_client.put(
+        "/api/settings", json={"system_prompt": "Verbatim, everything."}, headers=CSRF_HEADERS
+    )
+    again = await _upload(api_client, documents["text_pdf"])
+    assert again.status_code == 202
 
 
 @respx.mock
@@ -248,7 +323,7 @@ async def test_rate_limits_back_off_and_shrink_the_job_budget(
     respx.post(CHAT_URL).mock(
         side_effect=[
             httpx.Response(429, headers={"Retry-After": "0"}),
-            _completion(FIGURE_JSON),
+            _completion(VISION_MARKDOWN),
         ]
     )
 

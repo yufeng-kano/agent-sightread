@@ -16,9 +16,9 @@ from dataclasses import dataclass, field
 BBOX_FORMAT_YXYX = "yxyx_norm1000"
 
 # Part of the dedup cache key; bump when the pipeline changes results (docs/jobs.md).
-# The default templates below are covered by this version, since jobs that run a raw model
+# The default template below is covered by this version, since jobs that run a raw model
 # instead of a preset carry no profile version of their own.
-PIPELINE_VERSION = 1
+PIPELINE_VERSION = 2
 
 # Transcription prompt for a rendered page. `{page}` is the real page number: the model is
 # told what to write so the placeholder it emits already matches our own numbering.
@@ -34,16 +34,6 @@ space: [ymin, xmin, ymax, xmax] normalized to 0-1000, origin at the top-left cor
 this page image. Emit no other Markdown images.
 """
 
-# Figure detection for a page whose text came from the PDF text layer: boxes only.
-DEFAULT_FIGURE_PROMPT_TEMPLATE = """List every figure, chart, photograph, diagram or map
-in this page image. Answer with a JSON array and nothing else — no prose, no code fence.
-
-Each element is {{"bbox": [YMIN, XMIN, YMAX, XMAX], "caption": "..."}}, where the four
-integers are the {bbox_format} coordinate space: [ymin, xmin, ymax, xmax] normalized to
-0-1000, origin at the top-left corner of this page image, and caption is that figure's
-caption copied verbatim, or "" when it has none. Answer [] when there is no figure.
-"""
-
 
 @dataclass(frozen=True)
 class Profile:
@@ -52,7 +42,6 @@ class Profile:
     description: str
     bbox_format: str
     prompt_template: str
-    figure_prompt_template: str
     profile_version: int
     # Catalog matching: an id must be a base id, match `model_pattern`, and contain none
     # of `excluded_terms`.
@@ -91,8 +80,7 @@ PRESET_PROFILES: tuple[Profile, ...] = (
         ),
         bbox_format=BBOX_FORMAT_YXYX,
         prompt_template=DEFAULT_PROMPT_TEMPLATE,
-        figure_prompt_template=DEFAULT_FIGURE_PROMPT_TEMPLATE,
-        # 2: the phase-1 placeholder wording was replaced by the shipped prompts above.
+        # 2: the phase-1 placeholder wording was replaced by the shipped prompt above.
         profile_version=2,
         model_pattern=re.compile(r"^google/gemini[\w.-]*flash"),
         excluded_terms=("lite", "thinking", "-exp"),
@@ -106,7 +94,6 @@ PRESET_PROFILES: tuple[Profile, ...] = (
         ),
         bbox_format=BBOX_FORMAT_YXYX,
         prompt_template=DEFAULT_PROMPT_TEMPLATE,
-        figure_prompt_template=DEFAULT_FIGURE_PROMPT_TEMPLATE,
         profile_version=1,
         model_pattern=re.compile(r"^qwen/qwen[\w.-]*-vl"),
         excluded_terms=("thinking",),
@@ -116,3 +103,13 @@ PRESET_PROFILES: tuple[Profile, ...] = (
 
 def get_profile(profile_id: str) -> Profile | None:
     return next((profile for profile in PRESET_PROFILES if profile.id == profile_id), None)
+
+
+def transcription_prompt_template(profile_id: str | None) -> str:
+    """The prompt template a job runs when its user stores no custom prompt.
+
+    A raw model that matches no preset runs the default template and is untested by us —
+    output quality is then the user's own call (docs/parsing.md § Prompts).
+    """
+    profile = get_profile(profile_id) if profile_id else None
+    return DEFAULT_PROMPT_TEMPLATE if profile is None else profile.prompt_template

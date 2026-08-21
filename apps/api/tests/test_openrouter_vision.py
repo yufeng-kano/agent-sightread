@@ -20,13 +20,11 @@ from sightread.upstream.openrouter import (
     RateLimited,
     UpstreamError,
     UserKey,
-    detect_figures,
     transcribe_page,
 )
 
 SECRET = "test-secret-key-not-a-real-one"
 PROMPT = "Transcribe page {page} in {bbox_format}."
-FIGURE_PROMPT = "List figures in {bbox_format}."
 
 
 @pytest.fixture
@@ -80,42 +78,17 @@ async def test_transcribe_page_strips_a_code_fence(key, documents) -> None:
 
 
 @respx.mock
-async def test_detect_figures_parses_clamps_and_flags(key, documents) -> None:
-    payload = json.dumps(
-        [
-            {"bbox": [10, 20, 30, 40], "caption": "Figure 1: a chart"},
-            {"bbox": [-20, 0, 4000, 900], "caption": ""},
-            {"bbox": [50, 50, 10, 10], "caption": "backwards"},
-            {"bbox": "nonsense"},
-            {"caption": "no box at all"},
-        ]
+async def test_a_prompt_with_stray_braces_still_substitutes_its_tokens(key, documents) -> None:
+    """User-supplied templates go through plain replacement, never `str.format`."""
+    route = respx.post(CHAT_URL).mock(return_value=httpx.Response(200, json=completion("ok")))
+
+    await transcribe_page(
+        key, "m", "Emit {json} like {\"a\": 1} for page {page}.", "yxyx_norm1000",
+        documents["png"], 3,
     )
-    respx.post(CHAT_URL).mock(return_value=httpx.Response(200, json=completion(payload)))
 
-    detection = await detect_figures(key, "m", FIGURE_PROMPT, "yxyx_norm1000", documents["png"])
-
-    assert [figure.bbox for figure in detection.figures] == [(10, 20, 30, 40), (0, 0, 1000, 900)]
-    assert detection.figures[0].caption == "Figure 1: a chart"
-    assert detection.dropped == 3
-
-
-@respx.mock
-async def test_detect_figures_survives_a_non_json_answer(key, documents) -> None:
-    respx.post(CHAT_URL).mock(
-        return_value=httpx.Response(200, json=completion("There are no figures here."))
-    )
-    detection = await detect_figures(key, "m", FIGURE_PROMPT, "yxyx_norm1000", documents["png"])
-    assert detection.figures == []
-    assert detection.dropped == 0
-
-
-@respx.mock
-async def test_detect_figures_flags_broken_json(key, documents) -> None:
-    respx.post(CHAT_URL).mock(
-        return_value=httpx.Response(200, json=completion('[{"bbox": [1, 2, 3,]'))
-    )
-    detection = await detect_figures(key, "m", FIGURE_PROMPT, "yxyx_norm1000", documents["png"])
-    assert detection.dropped == 1
+    sent = json.loads(route.calls[0].request.content)
+    assert sent["messages"][0]["content"][0]["text"] == 'Emit {json} like {"a": 1} for page 3.'
 
 
 @respx.mock

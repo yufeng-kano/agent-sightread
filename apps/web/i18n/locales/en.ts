@@ -109,6 +109,15 @@ export default {
     customUse: 'Use this model',
     profileUnavailable: '{name} (unavailable)',
     saved: 'Default saved.',
+    promptTitle: 'System prompt',
+    promptLabel: 'Transcription prompt',
+    promptStateDefault: 'Using the default prompt.',
+    promptStateCustom: 'Using a custom prompt.',
+    promptNote:
+      "Sent with every page image. {'{page}'} and {'{bbox_format}'} are replaced per call. A custom prompt also overrides the preset profiles — figure coordinates and output shape are then your responsibility.",
+    promptSaved: 'Custom prompt saved.',
+    promptDefaultRestored: 'Default prompt restored.',
+    promptReset: 'Reset to default',
   },
   jobs: {
     headTitle: 'Jobs',

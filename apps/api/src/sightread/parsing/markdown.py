@@ -1,22 +1,15 @@
 """Markdown assembly and the `sightread://` figure placeholder contract (docs/api.md).
 
-Two shapes arrive here:
-
-- vision pages, where the model returns markdown already carrying placeholders, and
-- text-layer pages, where the words come from Poppler and the figure boxes come from a
-  separate detection call, so the placeholders are appended in reading order.
-
-Both end up with document-wide figure ids, page numbers we trust (ours, not the model's)
-and bounding boxes validated against the 0-1000 coordinate space.
+Vision pages arrive with the model's markdown already carrying placeholders. Assembly
+gives them document-wide figure ids, page numbers we trust (ours, not the model's),
+bounding boxes validated against the 0-1000 coordinate space, and a `<!-- page: N -->`
+marker in front of every page so any passage maps back to its page.
 """
 
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
-
-from .poppler import PageText
-from .route import group_lines
+from dataclasses import dataclass
 
 BBOX_MAX = 1000
 
@@ -26,25 +19,11 @@ PLACEHOLDER_RE = re.compile(
     r"(?P<ymin>-?\d+)\s*,\s*(?P<xmin>-?\d+)\s*,\s*(?P<ymax>-?\d+)\s*,\s*(?P<xmax>-?\d+)\s*\)"
 )
 
-# Paragraph break when the top-to-top step between two text lines exceeds this multiple of
-# the line height (ordinary leading lands near 1.3).
-PARAGRAPH_GAP_RATIO = 1.8
-
-
-@dataclass(frozen=True)
-class FigureBox:
-    """A detected figure before it gets a document-wide id."""
-
-    bbox: tuple[int, int, int, int]
-    caption: str = ""
-
 
 @dataclass
 class PageMarkdown:
     page: int
     markdown: str
-    # Figures detected separately from the text (the text-layer path); appended in order.
-    figures: list[FigureBox] = field(default_factory=list)
 
 
 @dataclass
@@ -68,17 +47,9 @@ def placeholder(figure_id: str, page: int, bbox: tuple[int, int, int, int]) -> s
     return f"![{figure_id}](sightread://p{page}/{y_min},{x_min},{y_max},{x_max})"
 
 
-def text_layer_markdown(page: PageText) -> str:
-    """Turn Poppler word boxes into paragraphs; verbatim text, no interpretation."""
-    blocks: list[str] = []
-    previous_top: float | None = None
-    for line in group_lines(page.words):
-        height = max(line[0].y_max - line[0].y_min, 1.0)
-        if previous_top is not None and line[0].y_min - previous_top > height * PARAGRAPH_GAP_RATIO:
-            blocks.append("")
-        blocks.append(" ".join(word.text for word in line))
-        previous_top = line[0].y_min
-    return "\n".join(blocks).strip()
+def page_marker(page: int) -> str:
+    """The marker line callers use to map content back to a page (docs/parsing.md)."""
+    return f"<!-- page: {page} -->"
 
 
 def _caption_after(text: str, end: int) -> str:
@@ -93,7 +64,7 @@ def _caption_after(text: str, end: int) -> str:
 
 
 def assemble(pages: list[PageMarkdown]) -> AssembledDocument:
-    """Join pages into one document with document-wide figure ids."""
+    """Join pages into one marked document with document-wide figure ids."""
     figures: list[dict] = []
     dropped = 0
     bodies: list[str] = []
@@ -130,24 +101,7 @@ def assemble(pages: list[PageMarkdown]) -> AssembledDocument:
         parts.append(page.markdown[cursor:])
 
         body = "".join(parts).strip()
-        for detected in page.figures:
-            bbox = clean_bbox(detected.bbox)
-            if bbox is None:
-                dropped += 1
-                continue
-            figure_id = f"fig{len(figures) + 1}"
-            figures.append(
-                {
-                    "id": figure_id,
-                    "page": page.page,
-                    "bbox": list(bbox),
-                    "caption": detected.caption,
-                }
-            )
-            body = (
-                f"{body}\n\n{placeholder(figure_id, page.page, bbox)}\n{detected.caption}".strip()
-            )
         if body:
-            bodies.append(body)
+            bodies.append(f"{page_marker(page.page)}\n{body}")
 
     return AssembledDocument(markdown="\n\n".join(bodies), figures=figures, dropped_figures=dropped)

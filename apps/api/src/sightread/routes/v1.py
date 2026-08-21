@@ -10,12 +10,19 @@ import uuid
 from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, Request, Response, status
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from starlette.datastructures import UploadFile
 
-from ..auth.deps import AppSettings, DbSession, JobReader, ReaderUser, UploaderCaller
+from ..auth.deps import (
+    AppSettings,
+    DbSession,
+    JobReader,
+    ReaderUser,
+    TicketJobId,
+    UploaderCaller,
+)
 from ..db.models import Job, Result, User
 from ..errors import ApiError
 from ..jobs import events
@@ -194,9 +201,7 @@ async def _owned_job(db: DbSession, job_id: uuid.UUID, user: User) -> Job:
     return job
 
 
-@router.get("/jobs/{job_id}")
-async def job_status(job_id: uuid.UUID, user: JobReader, db: DbSession):
-    job = await _owned_job(db, job_id, user)
+def _status_payload(job: Job) -> dict:
     return {
         "job_id": str(job.id),
         "status": job.status,
@@ -208,13 +213,54 @@ async def job_status(job_id: uuid.UUID, user: JobReader, db: DbSession):
     }
 
 
-@router.get("/jobs/{job_id}/result")
-async def job_result(job_id: uuid.UUID, user: JobReader, db: DbSession):
-    await _owned_job(db, job_id, user)
+async def _stored_result(db: DbSession, job_id: uuid.UUID) -> Result:
     result = (await db.execute(select(Result).where(Result.job_id == job_id))).scalar_one_or_none()
     if result is None:
         raise ApiError(404, "invalid_request", "This job has no result yet")
-    return result_payload(result)
+    return result
+
+
+def _markdown_response(result: Result) -> PlainTextResponse:
+    return PlainTextResponse(result.markdown, media_type="text/markdown; charset=utf-8")
+
+
+# The `last` aliases resolve an upload ticket to the job it created (docs/api.md). They
+# are declared before the `{job_id}` routes so the literal path wins the match.
+
+
+@router.get("/jobs/last")
+async def last_job_status(job_id: TicketJobId, db: DbSession):
+    job = (await db.execute(select(Job).where(Job.id == job_id))).scalar_one_or_none()
+    if job is None:
+        raise ApiError(404, "invalid_request", "No such job")
+    return _status_payload(job)
+
+
+@router.get("/jobs/last/result")
+async def last_job_result(job_id: TicketJobId, db: DbSession):
+    return result_payload(await _stored_result(db, job_id))
+
+
+@router.get("/jobs/last/result.md")
+async def last_job_markdown(job_id: TicketJobId, db: DbSession):
+    return _markdown_response(await _stored_result(db, job_id))
+
+
+@router.get("/jobs/{job_id}")
+async def job_status(job_id: uuid.UUID, user: JobReader, db: DbSession):
+    return _status_payload(await _owned_job(db, job_id, user))
+
+
+@router.get("/jobs/{job_id}/result")
+async def job_result(job_id: uuid.UUID, user: JobReader, db: DbSession):
+    await _owned_job(db, job_id, user)
+    return result_payload(await _stored_result(db, job_id))
+
+
+@router.get("/jobs/{job_id}/result.md")
+async def job_markdown(job_id: uuid.UUID, user: JobReader, db: DbSession):
+    await _owned_job(db, job_id, user)
+    return _markdown_response(await _stored_result(db, job_id))
 
 
 @router.get("/jobs/{job_id}/events")

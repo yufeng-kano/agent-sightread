@@ -33,9 +33,10 @@ Worker updates `jobs.pages_done` and `job_pages` rows as pages finish; SSE endpo
 
 ## Dedup cache
 
-Key: `(user_id, sha256, model, profile, profile_version, pages_spec, PIPELINE_VERSION)`.
+Key: `(user_id, sha256, model, profile, profile_version, pages_spec, prompt_sha256, PIPELINE_VERSION)`.
 
 - On `POST /v1/parse`, hash while streaming to disk; if a **succeeded** job matches the full key and `force` is not set → return its result immediately (200, `meta.cached: true`), delete the fresh upload, create no job.
+- **Only complete results are cache hits.** A result carrying page errors (a transient upstream failure, an unreadable page) is returned to its own job but never reused — the same upload reparses instead of replaying a degraded result forever.
 - **Per-user only.** Never dedup across users: it would spend one user's OpenRouter output on another and leak that a document was parsed before.
 - `force: true` always reparses (result row is replaced).
 

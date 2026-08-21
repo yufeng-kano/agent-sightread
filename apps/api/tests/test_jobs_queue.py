@@ -42,6 +42,8 @@ JOB_DEFAULTS = {
     "profile": None,
     "profile_version": 0,
     "bbox_format": "yxyx_norm1000",
+    "prompt": "Transcribe page {page} in {bbox_format}.",
+    "prompt_sha256": "p" * 64,
     "page_count": 2,
 }
 
@@ -80,12 +82,14 @@ async def test_dedup_lookup_matches_the_full_key(sessionmaker) -> None:
             "profile": None,
             "profile_version": 0,
             "pages_spec": "",
+            "prompt_sha256": "p" * 64,
         }
         assert (await find_cached_job(db, **key)).id == job.id
         assert await find_cached_job(db, **{**key, "sha256": "b" * 64}) is None
         assert await find_cached_job(db, **{**key, "model": "other/model"}) is None
         assert await find_cached_job(db, **{**key, "pages_spec": "1-2"}) is None
         assert await find_cached_job(db, **{**key, "profile": "gemini-yxyx"}) is None
+        assert await find_cached_job(db, **{**key, "prompt_sha256": "q" * 64}) is None
 
         other = await _user(db, "second@example.com")
         # Never across users, even for identical bytes (docs/jobs.md § Dedup).
@@ -109,6 +113,7 @@ async def test_dedup_ignores_unfinished_jobs(sessionmaker) -> None:
                 profile=None,
                 profile_version=0,
                 pages_spec="",
+                prompt_sha256="p" * 64,
             )
             is None
         )

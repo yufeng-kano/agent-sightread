@@ -137,6 +137,26 @@ async def require_job_reader(request: Request, db: DbSession) -> User:
 JobReader = Annotated[User, Depends(require_job_reader)]
 
 
+async def require_ticket_job(request: Request, db: DbSession) -> uuid.UUID:
+    """`GET /v1/jobs/last*` auth: an upload ticket, resolved to the job it created.
+
+    `last` exists so the MCP curl commands run without a job id to fill in (docs/api.md,
+    docs/mcp.md). A durable credential already knows its job id and uses the explicit
+    routes, so anything but a ticket is refused outright.
+    """
+    if not _presents_ticket(request):
+        raise ApiError(
+            400, "invalid_request", "'last' needs an upload ticket; use /v1/jobs/{id} instead"
+        )
+    ticket, _ = await _live_ticket(request, db)
+    if ticket.spent_at is None or ticket.job_id is None:
+        raise ApiError(401, "auth", upload_tickets.REJECTION_MESSAGE)
+    return ticket.job_id
+
+
+TicketJobId = Annotated[uuid.UUID, Depends(require_ticket_job)]
+
+
 async def require_reader_user(request: Request, db: DbSession) -> User:
     """`GET /v1/models` and `/v1/profiles` are safe reads the web app also calls, so they
     accept either a session cookie or an API key (docs/web.md)."""

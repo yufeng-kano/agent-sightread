@@ -23,7 +23,7 @@ from ..auth.sessions import SESSION_COOKIE, SESSION_TTL, create_session, delete_
 from ..db.models import ApiKey, Job, OpenRouterKey, Result, UsageLog, UserSettings, utcnow
 from ..errors import ApiError
 from ..jobs.runner import result_payload
-from ..parsing.profiles import get_profile
+from ..parsing.profiles import DEFAULT_PROMPT_TEMPLATE, get_profile
 from ..upstream.openrouter import validate_api_key
 
 router = APIRouter(prefix="/api", tags=["control"])
@@ -128,7 +128,10 @@ async def me(user: SessionUser, db: DbSession):
         "settings": {
             "default_model": settings_row.default_model if settings_row else None,
             "default_profile": settings_row.default_profile if settings_row else None,
+            "system_prompt": settings_row.system_prompt if settings_row else None,
         },
+        # The shipped prompt, so the settings page can show what "default" means.
+        "defaults": {"system_prompt": DEFAULT_PROMPT_TEMPLATE},
         "openrouter_key": {
             "present": key_row is not None,
             "masked": key_row.masked if key_row else None,
@@ -251,14 +254,24 @@ async def delete_openrouter_key(user: SessionUser, db: DbSession) -> Response:
 
 
 class SettingsPut(BaseModel):
+    """Partial update: only the fields present in the body change (docs/api.md)."""
+
     default_model: str | None = Field(default=None, max_length=255)
     default_profile: str | None = Field(default=None, max_length=64)
+    system_prompt: str | None = None
 
 
 @router.put("/settings", dependencies=[CsrfGuard])
-async def put_settings(body: SettingsPut, user: SessionUser, db: DbSession):
+async def put_settings(body: SettingsPut, user: SessionUser, db: DbSession, settings: AppSettings):
     if body.default_profile is not None and get_profile(body.default_profile) is None:
         raise ApiError(400, "invalid_request", f"Unknown profile '{body.default_profile}'")
+    prompt = body.system_prompt.strip() if body.system_prompt else None
+    if prompt and len(prompt) > settings.system_prompt_max_chars:
+        raise ApiError(
+            400,
+            "invalid_request",
+            f"The system prompt exceeds {settings.system_prompt_max_chars} characters",
+        )
 
     row = (
         await db.execute(select(UserSettings).where(UserSettings.user_id == user.id))
@@ -266,10 +279,19 @@ async def put_settings(body: SettingsPut, user: SessionUser, db: DbSession):
     if row is None:
         row = UserSettings(user_id=user.id)
         db.add(row)
-    row.default_model = body.default_model
-    row.default_profile = body.default_profile
+    provided = body.model_fields_set
+    # The model/profile pair travels together: the web app always sends both.
+    if "default_model" in provided or "default_profile" in provided:
+        row.default_model = body.default_model
+        row.default_profile = body.default_profile
+    if "system_prompt" in provided:
+        row.system_prompt = prompt
     await db.commit()
-    return {"default_model": row.default_model, "default_profile": row.default_profile}
+    return {
+        "default_model": row.default_model,
+        "default_profile": row.default_profile,
+        "system_prompt": row.system_prompt,
+    }
 
 
 # --- usage ----------------------------------------------------------------------------

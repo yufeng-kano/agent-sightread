@@ -40,16 +40,19 @@ COORDINATE_CONTRACT = (
 
 # Everything the agent needs that is not in a command string (docs/mcp.md § The one tool).
 NOTES = (
+    "Run `upload`, wait for it to finish, then run `markdown` — result.md is the parsed "
+    "document as plain markdown, with an `<!-- page: N -->` marker before each page's "
+    "content. `metadata` fetches result.json (figures, pages, errors, meta) for "
+    "coordinate work; `status` answers whether the job is done and what failed. "
     "Optional form fields on the upload: `-F model=<id>`, `-F profile=<id>`, "
     "`-F pages=1-5,8`, `-F force=true` (bypass the dedup cache). A PDF and an image "
-    "(jpg/png/webp/heic) both go to the same endpoint — only the file changes. The stream "
-    "sends one `progress` event per finished page and ends with a single `done` event "
-    "whose `data:` line is the full result payload (or an `error` event); `-o` lands it on "
-    "disk, so read the file selectively instead of printing all of it. `job_id` appears in "
-    "those events; use it in the status/result commands if the stream drops. A dedup hit "
-    "streams `done` at once. The ticket is good for one upload and then only for reading "
-    "the job it created: once it is spent or expired, call `parse` again for a fresh one "
-    "and re-upload the same file — the cached result comes back instantly."
+    "(jpg/png/webp/heic) both go to the same endpoint — only the file changes. "
+    "`/v1/jobs/last` resolves to this ticket's own job; the explicit "
+    "`/v1/jobs/<job_id>` routes work too (`job_id` is in every SSE `progress` event and "
+    "in `meta.job_id`). A dedup hit ends the upload stream at once. The ticket is good "
+    "for one upload and then only for reading the job it created: once it is spent or "
+    "expired, call `parse` again for a fresh one and re-upload the same file — the "
+    "cached result comes back instantly."
 )
 
 # The authenticated user for the request being served. Set by the ASGI guard below and read
@@ -85,8 +88,9 @@ def build_server(app: FastAPI) -> MCPServer:
     @server.tool(
         description=(
             "Start a parse: returns a single-use upload ticket and the exact curl commands "
-            "that upload a PDF or image and read the result. Takes no arguments — do not "
-            "send file content here; run the returned `upload` command in your shell. "
+            "that upload a PDF or image and land the parsed document as result.md (page "
+            "markers included). Takes no arguments — do not send file content here; run "
+            "the returned `upload` command in your shell, then `markdown`. "
             + COORDINATE_CONTRACT
         )
     )
@@ -106,10 +110,11 @@ def build_server(app: FastAPI) -> MCPServer:
             "page_cap": settings.page_cap,
             "upload": (
                 f"curl -sN {auth} -H 'Accept: text/event-stream' "
-                f"-F file=@doc.pdf {base}/v1/parse -o result.sse"
+                f"-F file=@doc.pdf {base}/v1/parse -o progress.sse"
             ),
-            "status": f"curl -s {auth} {base}/v1/jobs/<job_id>",
-            "result": f"curl -s {auth} {base}/v1/jobs/<job_id>/result -o result.json",
+            "markdown": f"curl -s {auth} {base}/v1/jobs/last/result.md -o result.md",
+            "metadata": f"curl -s {auth} {base}/v1/jobs/last/result -o result.json",
+            "status": f"curl -s {auth} {base}/v1/jobs/last",
             "notes": NOTES,
         }
 

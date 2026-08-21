@@ -108,6 +108,15 @@ export default {
     customUse: '使用此模型',
     profileUnavailable: '{name}（目前無法使用）',
     saved: '預設值已儲存。',
+    promptTitle: '系統提示詞',
+    promptLabel: '轉錄提示詞',
+    promptStateDefault: '目前使用預設提示詞。',
+    promptStateCustom: '目前使用自訂提示詞。',
+    promptNote:
+      "每一頁的頁面圖片都會帶上這段提示詞，{'{page}'} 與 {'{bbox_format}'} 會在每次呼叫時代換。自訂提示詞也會覆蓋預設組合的提示詞，圖片座標與輸出格式由你自行負責。",
+    promptSaved: '自訂提示詞已儲存。',
+    promptDefaultRestored: '已恢復預設提示詞。',
+    promptReset: '恢復預設',
   },
   jobs: {
     headTitle: '工作紀錄',

@@ -131,6 +131,48 @@ function openCustom() {
   addingCustom.value = true
 }
 
+/** The transcription prompt: the stored custom one, or the shipped default to start from. */
+const defaultPrompt = computed(() => auth.me.value?.defaults.system_prompt ?? '')
+const storedPrompt = computed(() => auth.me.value?.settings.system_prompt ?? null)
+const promptInput = ref('')
+const promptPending = ref(false)
+const promptError = ref<string | null>(null)
+const promptMessage = ref<string | null>(null)
+
+watch(
+  [storedPrompt, defaultPrompt],
+  () => {
+    promptInput.value = storedPrompt.value ?? defaultPrompt.value
+  },
+  { immediate: true },
+)
+
+async function savePrompt() {
+  if (promptPending.value) {
+    return
+  }
+  const trimmed = promptInput.value.trim()
+  // Saving the untouched default stores nothing, so future default improvements apply.
+  const wanted = trimmed && trimmed !== defaultPrompt.value.trim() ? trimmed : null
+  promptPending.value = true
+  promptError.value = null
+  promptMessage.value = null
+  try {
+    await putSettings({ system_prompt: wanted })
+    promptMessage.value = t(wanted ? 'settings.promptSaved' : 'settings.promptDefaultRestored')
+    await auth.refresh()
+  } catch (error) {
+    promptError.value = await resolve(error)
+  } finally {
+    promptPending.value = false
+  }
+}
+
+async function resetPrompt() {
+  promptInput.value = defaultPrompt.value
+  await savePrompt()
+}
+
 async function submitCustom() {
   const choice = customChoice.value
   if (!choice || defaultsPending.value) {
@@ -243,6 +285,43 @@ async function submitCustom() {
           <UiBanner v-else-if="defaultsMessage" tone="ok">{{ defaultsMessage }}</UiBanner>
         </div>
       </UiCard>
+
+      <UiCard :title="t('settings.promptTitle')">
+        <div class="section">
+          <p class="state">
+            {{ storedPrompt ? t('settings.promptStateCustom') : t('settings.promptStateDefault') }}
+          </p>
+
+          <UiField v-slot="{ id }" :label="t('settings.promptLabel')">
+            <textarea
+              :id="id"
+              v-model="promptInput"
+              class="prompt-input"
+              rows="10"
+              spellcheck="false"
+              :disabled="promptPending"
+            />
+          </UiField>
+          <p class="custom-note">{{ t('settings.promptNote') }}</p>
+
+          <div class="control-row">
+            <UiButton
+              variant="primary"
+              :loading="promptPending"
+              :disabled="!promptInput.trim()"
+              @click="savePrompt"
+            >
+              {{ t('common.save') }}
+            </UiButton>
+            <UiButton v-if="storedPrompt" :disabled="promptPending" @click="resetPrompt">
+              {{ t('settings.promptReset') }}
+            </UiButton>
+          </div>
+
+          <UiBanner v-if="promptError" tone="error">{{ promptError }}</UiBanner>
+          <UiBanner v-else-if="promptMessage" tone="ok">{{ promptMessage }}</UiBanner>
+        </div>
+      </UiCard>
     </div>
 
     <UiModal v-if="addingCustom" :title="t('settings.customTitle')" @close="addingCustom = false">
@@ -321,6 +400,43 @@ async function submitCustom() {
 .custom-form {
   display: grid;
   gap: var(--space-3);
+}
+
+/* Same skin as UiTextInput's `.control`, sized for a prompt instead of one line. */
+.prompt-input {
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  resize: vertical;
+  outline: none;
+  transition:
+    border-color var(--duration-fast) var(--ease),
+    box-shadow var(--duration-fast) var(--ease);
+}
+
+.prompt-input:focus {
+  border-color: var(--ring-border);
+  box-shadow: var(--ring);
+  outline: none;
+}
+
+.prompt-input:disabled {
+  background: var(--surface-2);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+@media (pointer: coarse) {
+  .prompt-input {
+    font-size: var(--text-md);
+  }
 }
 
 .custom-note {
