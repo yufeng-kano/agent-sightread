@@ -107,7 +107,9 @@ async def test_parse_mints_a_ticket_and_ready_to_run_commands(api_client, sessio
 
     assert payload["upload"] == (
         f"curl -sN -H 'Authorization: Bearer {token}' -H 'Accept: text/event-stream' "
-        f"-F file=@doc.pdf {base}/v1/parse -o progress.sse"
+        f"-F file=@doc.pdf {base}/v1/parse -o progress.sse "
+        f"&& curl -s -H 'Authorization: Bearer {token}' {base}/v1/jobs/last/result.md "
+        f"-o result.md"
     )
     assert payload["markdown"] == (
         f"curl -s -H 'Authorization: Bearer {token}' {base}/v1/jobs/last/result.md -o result.md"
@@ -127,6 +129,8 @@ async def test_parse_mints_a_ticket_and_ready_to_run_commands(api_client, sessio
         "force=true",
         "jpg/png/webp/heic",
         "<!-- page: N -->",
+        "NEVER print",
+        "sightread://pPAGE/YMIN,XMIN,YMAX,XMAX",
     ):
         assert fragment in payload["notes"]
     assert "cached result comes back instantly" in payload["notes"]

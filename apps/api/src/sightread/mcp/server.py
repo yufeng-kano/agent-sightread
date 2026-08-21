@@ -40,19 +40,24 @@ COORDINATE_CONTRACT = (
 
 # Everything the agent needs that is not in a command string (docs/mcp.md § The one tool).
 NOTES = (
-    "Run `upload`, wait for it to finish, then run `markdown` — result.md is the parsed "
-    "document as plain markdown, with an `<!-- page: N -->` marker before each page's "
-    "content. `metadata` fetches result.json (figures, pages, errors, meta) for "
-    "coordinate work; `status` answers whether the job is done and what failed. "
-    "Optional form fields on the upload: `-F model=<id>`, `-F profile=<id>`, "
-    "`-F pages=1-5,8`, `-F force=true` (bypass the dedup cache). A PDF and an image "
-    "(jpg/png/webp/heic) both go to the same endpoint — only the file changes. "
+    "Run `upload` — the one command uploads the file, waits on the SSE stream until the "
+    "parse finishes, then lands the document as result.md. Read result.md; NEVER print "
+    "progress.sse — its final `done` event is the entire result JSON on one line and "
+    "will flood your context. To check on a parse use the `status` command or "
+    "`grep -c 'event: done' progress.sse`. Crop boxes are already in result.md: every "
+    "figure is `![figN](sightread://pPAGE/YMIN,XMIN,YMAX,XMAX)` with an "
+    "`<!-- page: N -->` marker before each page's content; coordinates are 0-1000 "
+    "normalized to that page, so scale by your rendered page size to crop — no second "
+    "fetch needed. `metadata` (result.json) adds the figures array with captions, page "
+    "dimensions and per-page errors. Optional form fields on the upload: "
+    "`-F model=<id>`, `-F profile=<id>`, `-F pages=1-5,8`, `-F force=true` (bypass the "
+    "dedup cache). A PDF and an image (jpg/png/webp/heic) both go to the same endpoint. "
     "`/v1/jobs/last` resolves to this ticket's own job; the explicit "
-    "`/v1/jobs/<job_id>` routes work too (`job_id` is in every SSE `progress` event and "
-    "in `meta.job_id`). A dedup hit ends the upload stream at once. The ticket is good "
-    "for one upload and then only for reading the job it created: once it is spent or "
-    "expired, call `parse` again for a fresh one and re-upload the same file — the "
-    "cached result comes back instantly."
+    "`/v1/jobs/<job_id>` routes work too (`job_id` is in every `progress` event and in "
+    "`meta.job_id`). A dedup hit ends the stream at once. The ticket is good for one "
+    "upload and then only for reading the job it created: once it is spent or expired, "
+    "call `parse` again for a fresh one and re-upload the same file — the cached result "
+    "comes back instantly."
 )
 
 # The authenticated user for the request being served. Set by the ASGI guard below and read
@@ -110,7 +115,8 @@ def build_server(app: FastAPI) -> MCPServer:
             "page_cap": settings.page_cap,
             "upload": (
                 f"curl -sN {auth} -H 'Accept: text/event-stream' "
-                f"-F file=@doc.pdf {base}/v1/parse -o progress.sse"
+                f"-F file=@doc.pdf {base}/v1/parse -o progress.sse "
+                f"&& curl -s {auth} {base}/v1/jobs/last/result.md -o result.md"
             ),
             "markdown": f"curl -s {auth} {base}/v1/jobs/last/result.md -o result.md",
             "metadata": f"curl -s {auth} {base}/v1/jobs/last/result -o result.json",
