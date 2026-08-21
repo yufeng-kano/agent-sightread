@@ -9,7 +9,7 @@ agent-sightread is a hosted, multi-user document-understanding service: PDF and 
 The origin spec (v0.1) is a reference, not a contract. Decisions that supersede it:
 
 1. **Not stateless.** Jobs, results, and usage live in PostgreSQL. Parse results (markdown + metadata) are kept indefinitely; **source files are deleted immediately** when a job reaches a terminal state (see [jobs.md](./jobs.md)).
-2. **REST is the core; MCP is a thin shell** over the same service layer ([mcp.md](./mcp.md)).
+2. **REST is the core; MCP is a thin shell** over the same service layer — a single `parse` tool that mints an upload ticket and returns `curl` commands; file bytes never travel through MCP. Requires the agent to have shell + network access ([mcp.md](./mcp.md)).
 3. **No `file path` source.** Hosted service accepts uploads (multipart) or base64 only — server paths would be an LFI.
 4. **Model is user-chosen.** Users pick any image-input model from OpenRouter; preset **profiles** bundle tested model + coordinate prompt + parser. Off-profile models are allowed and flagged untested — bbox quality is the user's responsibility ([parsing.md](./parsing.md)).
 5. **bbox format is declared per response** (`bbox_format` field), not assumed globally.

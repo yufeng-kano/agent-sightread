@@ -1,6 +1,6 @@
 # Auth
 
-Four credential kinds, strictly separated. No password login anywhere.
+Five credential kinds, strictly separated. No password login anywhere.
 
 ## 1. Web sessions — Google OIDC only
 
@@ -38,6 +38,17 @@ Implementation notes (as built):
 - **Consent CSRF**: the consent form carries a one-time token stored in the short-lived signed cookie; a cross-site form post cannot produce it. That same cookie parks the authorize request while the user signs in with Google, and only a path under `/oauth/authorize` is resumed.
 - **Local without Google**: `/oauth/authorize` answers 401 with a page telling the operator to sign in through the web app's dev login first, instead of redirecting to a Google client that does not exist.
 - **`resource` (RFC 8707)** is accepted and ignored: this AS protects exactly one resource, `APP_URL + /mcp`.
+
+## 5. Upload tickets — single-use, job-scoped (the MCP `parse` tool)
+
+A ticket lets an agent do exactly one upload and then read the job that upload created — nothing else. Minted only by the MCP `parse` tool ([mcp.md](./mcp.md)); the point is that an OAuth-connector agent never holds a durable credential, and a leaked ticket is worth one upload to one account for an hour, not an API key.
+
+- Format `srt_<32 random url-safe chars>`; stored as SHA-256 hash + display prefix (`srt_...abc4`) in `upload_tickets` ([database.md](./database.md)). Returned in the tool result exactly once.
+- Lifetime `UPLOAD_TICKET_TTL_SECONDS` (default 3600). One TTL covers the upload and the reads; recovery from an expired ticket is minting a new one and re-uploading — dedup makes that free ([jobs.md](./jobs.md) § Dedup).
+- **Scope.** An unspent ticket authenticates `POST /v1/parse` once. When the upload creates a job (or hits the dedup cache), the ticket binds to that `job_id` and is marked spent; from then on it authenticates only `GET /v1/jobs/{id}`, `/result`, `/events` for that one job. A request that fails before a job exists (413, 400, 429) does **not** spend the ticket. Every other endpoint — `/mcp` included — refuses `srt_` tokens.
+- **Rejection copy is part of the contract.** A spent/expired/unknown ticket gets 401 with: `Upload ticket expired or already spent — call the parse tool again for a fresh ticket; re-uploading the same file returns the cached result instantly.` That message is the agent's only recovery hint, so it lives in the response, not just here.
+- **Mint rate limit:** `UPLOAD_TICKET_RATE_PER_HOUR` (default 30) per user; exceeding it is a 429-shaped tool error. Minting also deletes that user's expired tickets (opportunistic cleanup — no sweeper involvement, the table stays small because every mint tidies up).
+- Never in query strings, like every other bearer.
 
 ## Logging rule
 

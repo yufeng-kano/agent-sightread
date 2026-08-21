@@ -1,21 +1,21 @@
 """The MCP endpoint: streamable HTTP at `POST /mcp`, mounted in the same app (docs/mcp.md).
 
-A shell and nothing more. Every tool is: authenticate (the same bearer as `/v1`), call
-`jobs.intake`, follow `jobs.events`, hand back the same payload REST returns. No parsing
-decision, no model choice and no queue knowledge lives here, so an MCP spec change touches
-this file alone (docs/project-structure.md § Boundaries).
+A shell and nothing more. The one tool mints a single-use upload ticket (docs/auth.md § 5)
+and formats the `curl` commands that carry it; the document bytes go out-of-band through
+`/v1/parse`, because base64 in tool arguments would burn the file size over again in model
+tokens. No parsing decision, no model choice and no queue knowledge lives here, so an MCP
+spec change touches this file alone (docs/project-structure.md § Boundaries).
 """
 
 from __future__ import annotations
 
-import re
-import uuid
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
+from datetime import UTC
 from typing import Any
 
 from fastapi import FastAPI
-from mcp.server.mcpserver import Context, MCPServer
+from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,19 +23,13 @@ from starlette.requests import Request
 from starlette.routing import Route
 from starlette.types import Receive, Scope, Send
 
+from ..auth import upload_tickets
 from ..auth.deps import bearer_credential, resolve_bearer
-from ..db.models import Job, Result, User
+from ..db.models import User
 from ..errors import error_response
-from ..jobs import events
-from ..jobs.intake import PDF_MEDIA_TYPE, base64_chunks, cached_payload, submit_parse
-from ..jobs.runner import result_payload
 
 MCP_PATH = "/mcp"
 PROTECTED_RESOURCE_PATH = "/.well-known/oauth-protected-resource"
-
-# A source that looks like a filesystem path is refused outright: this is a hosted service
-# and a server-side path would be a local file read, not an upload (docs/product.md § 3).
-PATH_LIKE = re.compile(r"^(/|\./|\.\./|~|file://|[A-Za-z]:[\\/])")
 
 COORDINATE_CONTRACT = (
     "Figures come back as `![figN](sightread://pPAGE/x1,y1,x2,y2)` placeholders with the "
@@ -44,8 +38,22 @@ COORDINATE_CONTRACT = (
     "are in `pages`."
 )
 
+# Everything the agent needs that is not in a command string (docs/mcp.md § The one tool).
+NOTES = (
+    "Optional form fields on the upload: `-F model=<id>`, `-F profile=<id>`, "
+    "`-F pages=1-5,8`, `-F force=true` (bypass the dedup cache). A PDF and an image "
+    "(jpg/png/webp/heic) both go to the same endpoint — only the file changes. The stream "
+    "sends one `progress` event per finished page and ends with a single `done` event "
+    "whose `data:` line is the full result payload (or an `error` event); `-o` lands it on "
+    "disk, so read the file selectively instead of printing all of it. `job_id` appears in "
+    "those events; use it in the status/result commands if the stream drops. A dedup hit "
+    "streams `done` at once. The ticket is good for one upload and then only for reading "
+    "the job it created: once it is spent or expired, call `parse` again for a fresh one "
+    "and re-upload the same file — the cached result comes back instantly."
+)
+
 # The authenticated user for the request being served. Set by the ASGI guard below and read
-# by the tools; the streamable-HTTP transport runs each request's handler in a task spawned
+# by the tool; the streamable-HTTP transport runs each request's handler in a task spawned
 # from that request, so the value a tool sees is the one its own caller presented.
 _current_user_id: ContextVar[int | None] = ContextVar("sightread_mcp_user_id", default=None)
 
@@ -62,156 +70,47 @@ async def _current_user(db: AsyncSession) -> User:
     return user
 
 
-def _check_source(source: str) -> None:
-    if not source.strip():
-        raise ValueError("source is required: base64-encoded document bytes")
-    if PATH_LIKE.match(source.strip()):
-        raise ValueError("source must be base64 document bytes; file paths are not accepted")
-
-
-async def _run_parse(
-    app: FastAPI,
-    ctx: Context,
-    *,
-    source: str,
-    media_type: str,
-    pages: str | None,
-    model: str | None,
-    profile: str | None,
-    force: bool,
-) -> dict[str, Any]:
-    """Queue the parse, report progress as pages land, return the finished result."""
-    _check_source(source)
-    settings = app.state.settings
-    sessionmaker = app.state.sessionmaker
-
-    async with sessionmaker() as db:
-        user = await _current_user(db)
-        submission = await submit_parse(
-            db,
-            settings,
-            user=user,
-            chunks=base64_chunks(source),
-            media_type=media_type,
-            model=model,
-            profile_id=profile,
-            pages=pages,
-            force=force,
-        )
-    if submission.cached is not None:
-        return cached_payload(submission.cached)
-
-    job_id = submission.job.id
-    # The worker owns the job from here: a client that disconnects only stops watching, and
-    # `get_result` picks the same job up later (docs/mcp.md).
-    async for event, data in events.iter_job_events(sessionmaker, settings.database_url, job_id):
-        if event == events.PROGRESS:
-            await ctx.report_progress(
-                progress=data["pages_done"],
-                total=data["page_count"],
-                message=f"page {data['page']} ({data['method']})",
-            )
-        elif event == events.DONE:
-            return data
-        elif event == events.ERROR:
-            raise RuntimeError(f"{data['error']['message']} (job_id {job_id})")
-    raise RuntimeError(f"The job stream ended without a result (job_id {job_id})")
-
-
 def build_server(app: FastAPI) -> MCPServer:
-    """The MCP server and its three tools (docs/mcp.md § Tools)."""
+    """The MCP server and its one tool (docs/mcp.md § The one tool)."""
     server = MCPServer(
         "agent-sightread",
         instructions=(
-            "Parse PDFs and images into markdown with figure bounding boxes. Upload bytes "
-            "as base64; the service never reads files from a path. " + COORDINATE_CONTRACT
+            "Parse PDFs and images into markdown with figure bounding boxes. Call `parse` "
+            "for a single-use upload ticket and ready-to-run curl commands, then run them "
+            "in your shell: the file goes straight to the REST endpoint and the result "
+            "lands on disk, never through this connection. " + COORDINATE_CONTRACT
         ),
     )
 
     @server.tool(
         description=(
-            "Parse a PDF into markdown. `source` is the base64-encoded PDF itself — no file "
-            "paths, this is a hosted service. Optional `pages` ('1-5,8'), `model`, `profile`, "
-            "and `force` (bypass the per-user dedup cache). Returns markdown, per-page method "
-            "and dimensions, and figures. " + COORDINATE_CONTRACT
-        )
-    )
-    async def parse_document(
-        ctx: Context,
-        source: str,
-        media_type: str = PDF_MEDIA_TYPE,
-        pages: str | None = None,
-        model: str | None = None,
-        profile: str | None = None,
-        force: bool = False,
-    ) -> dict[str, Any]:
-        return await _run_parse(
-            app,
-            ctx,
-            source=source,
-            media_type=media_type,
-            pages=pages,
-            model=model,
-            profile=profile,
-            force=force,
-        )
-
-    @server.tool(
-        description=(
-            "Parse one image (jpg/png/webp/heic) into markdown. `source` is the base64-encoded "
-            "image itself — no file paths. Optional `model`, `profile`, `force`. "
+            "Start a parse: returns a single-use upload ticket and the exact curl commands "
+            "that upload a PDF or image and read the result. Takes no arguments — do not "
+            "send file content here; run the returned `upload` command in your shell. "
             + COORDINATE_CONTRACT
         )
     )
-    async def parse_image(
-        ctx: Context,
-        source: str,
-        media_type: str = "image/png",
-        model: str | None = None,
-        profile: str | None = None,
-        force: bool = False,
-    ) -> dict[str, Any]:
-        return await _run_parse(
-            app,
-            ctx,
-            source=source,
-            media_type=media_type,
-            pages=None,
-            model=model,
-            profile=profile,
-            force=force,
-        )
-
-    @server.tool(
-        description=(
-            "Fetch a parse job by id: its status, and `result` (the same payload parse_document "
-            "returns) once it finished. Use it after a disconnect — the job keeps running."
-        )
-    )
-    async def get_result(job_id: str) -> dict[str, Any]:
-        try:
-            wanted = uuid.UUID(job_id)
-        except ValueError as exc:
-            raise ValueError("job_id must be a UUID") from exc
-
+    async def parse() -> dict[str, Any]:
+        settings = app.state.settings
         async with app.state.sessionmaker() as db:
-            user = await _current_user(db)
-            job = (
-                await db.execute(select(Job).where(Job.id == wanted, Job.user_id == user.id))
-            ).scalar_one_or_none()
-            if job is None:
-                raise ValueError("No such job")
-            result = (
-                await db.execute(select(Result).where(Result.job_id == wanted))
-            ).scalar_one_or_none()
+            ticket, token = await upload_tickets.mint(db, settings, await _current_user(db))
 
+        base = settings.app_url.rstrip("/")
+        auth = f"-H 'Authorization: Bearer {token}'"
+        # `2026-08-21T15:00:00Z`, the shape docs/mcp.md shows.
+        expires_at = ticket.expires_at.astimezone(UTC).replace(microsecond=0).isoformat()
         return {
-            "job_id": str(job.id),
-            "status": job.status,
-            "page_count": job.page_count,
-            "pages_done": job.pages_done,
-            "error": job.error,
-            "result": result_payload(result) if result is not None else None,
+            "token": token,
+            "expires_at": expires_at.replace("+00:00", "Z"),
+            "max_upload_bytes": settings.upload_max_bytes,
+            "page_cap": settings.page_cap,
+            "upload": (
+                f"curl -sN {auth} -H 'Accept: text/event-stream' "
+                f"-F file=@doc.pdf {base}/v1/parse -o result.sse"
+            ),
+            "status": f"curl -s {auth} {base}/v1/jobs/<job_id>",
+            "result": f"curl -s {auth} {base}/v1/jobs/<job_id>/result -o result.json",
+            "notes": NOTES,
         }
 
     return server

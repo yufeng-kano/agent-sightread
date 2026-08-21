@@ -1,9 +1,9 @@
 """Parse intake: everything between "bytes arrive" and "a job exists" (docs/api.md, docs/jobs.md).
 
-`POST /v1/parse` and the MCP `parse_*` tools run this one sequence — store, hash, probe,
-dedup, enqueue — so the caps, the page limit and the dedup key cannot drift between the two
-entry points. The callers keep only their own transport concerns (multipart vs base64, SSE
-vs progress notifications); the shells own no business logic (docs/project-structure.md).
+`POST /v1/parse` runs this one sequence — store, hash, probe, dedup, enqueue — whichever
+credential opened the door (API key, OAuth token or an upload ticket). The route keeps only
+its transport concerns (multipart vs base64, SSE vs JSON); the shell owns no business logic
+(docs/project-structure.md).
 """
 
 from __future__ import annotations
@@ -19,8 +19,9 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..auth import upload_tickets
 from ..config import Settings
-from ..db.models import Job, Result, User
+from ..db.models import Job, Result, UploadTicket, User
 from ..errors import ApiError
 from ..parsing import poppler
 from ..parsing.images import ACCEPTED_IMAGE_TYPES, ImageError, probe_image
@@ -146,13 +147,6 @@ async def count_pages(kind: str, path: Path, upload_dir: Path, page_cap: int) ->
     return info.page_count
 
 
-def default_filename(media_type: str) -> str:
-    """A filename for callers that upload bytes without one (the MCP tools)."""
-    if media_type == PDF_MEDIA_TYPE:
-        return "upload.pdf"
-    return f"upload{ACCEPTED_IMAGE_TYPES.get(media_type, '')}"
-
-
 async def submit_parse(
     db: AsyncSession,
     settings: Settings,
@@ -160,14 +154,18 @@ async def submit_parse(
     user: User,
     chunks: AsyncIterator[bytes],
     media_type: str,
-    filename: str | None = None,
+    filename: str,
     model: str | None = None,
     profile_id: str | None = None,
     pages: str | None = None,
     force: bool = False,
+    ticket: UploadTicket | None = None,
 ) -> Submission:
-    """Store the document, dedup it and queue the parse. Commits before it returns."""
-    filename = filename or default_filename(media_type)
+    """Store the document, dedup it and queue the parse. Commits before it returns.
+
+    An upload ticket is bound and spent by that same commit, so nothing rejected on the way
+    here (413, 400, 429) costs the caller its one upload (docs/auth.md § 5).
+    """
     kind, media_type = resolve_kind(filename, media_type)
     target_model, target_profile, profile_version, bbox_format = await resolve_target(
         user, model, profile_id
@@ -215,6 +213,9 @@ async def submit_parse(
         if result is not None:
             # The cache already holds this exact parse; the fresh copy is dead weight.
             stored.unlink(missing_ok=True)
+            if ticket is not None:
+                upload_tickets.spend(ticket, result.job_id)
+                await db.commit()
             return Submission(cached=result)
 
     job = await enqueue_job(
@@ -233,6 +234,8 @@ async def submit_parse(
         page_count=page_count,
         source_path=str(stored),
     )
+    if ticket is not None:
+        upload_tickets.spend(ticket, job.id)
     await db.commit()
     return Submission(job=job)
 

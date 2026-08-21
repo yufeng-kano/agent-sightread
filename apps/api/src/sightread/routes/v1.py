@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from starlette.datastructures import UploadFile
 
-from ..auth.deps import AppSettings, BearerUser, DbSession, ReaderUser
+from ..auth.deps import AppSettings, DbSession, JobReader, ReaderUser, UploaderCaller
 from ..db.models import Job, Result, User
 from ..errors import ApiError
 from ..jobs import events
@@ -114,11 +114,12 @@ def _cached_response(result: Result, wants_stream: bool) -> Response:
 
 
 @router.post("/parse")
-async def parse(request: Request, user: BearerUser, db: DbSession, settings: AppSettings):
+async def parse(request: Request, caller: UploaderCaller, db: DbSession, settings: AppSettings):
     """Accept a document, dedup it, and queue the parse (docs/api.md § POST /v1/parse).
 
     Transport only: reading the body is this route's job, the intake sequence behind it is
-    `jobs.intake` — the MCP tools run the same one (docs/project-structure.md).
+    `jobs.intake` (docs/project-structure.md). An upload ticket is spent by that same
+    intake transaction, so a request refused before a job exists keeps it usable.
     """
     content_type = request.headers.get("content-type", "")
     wants_stream = SSE_MEDIA_TYPE in request.headers.get("accept", "")
@@ -156,7 +157,7 @@ async def parse(request: Request, user: BearerUser, db: DbSession, settings: App
     submission = await submit_parse(
         db,
         settings,
-        user=user,
+        user=caller.user,
         chunks=chunks,
         media_type=media_type,
         filename=filename,
@@ -164,6 +165,7 @@ async def parse(request: Request, user: BearerUser, db: DbSession, settings: App
         profile_id=profile_id,
         pages=pages,
         force=force,
+        ticket=caller.ticket,
     )
     if submission.cached is not None:
         return _cached_response(submission.cached, wants_stream)
@@ -193,7 +195,7 @@ async def _owned_job(db: DbSession, job_id: uuid.UUID, user: User) -> Job:
 
 
 @router.get("/jobs/{job_id}")
-async def job_status(job_id: uuid.UUID, user: BearerUser, db: DbSession):
+async def job_status(job_id: uuid.UUID, user: JobReader, db: DbSession):
     job = await _owned_job(db, job_id, user)
     return {
         "job_id": str(job.id),
@@ -207,7 +209,7 @@ async def job_status(job_id: uuid.UUID, user: BearerUser, db: DbSession):
 
 
 @router.get("/jobs/{job_id}/result")
-async def job_result(job_id: uuid.UUID, user: BearerUser, db: DbSession):
+async def job_result(job_id: uuid.UUID, user: JobReader, db: DbSession):
     await _owned_job(db, job_id, user)
     result = (await db.execute(select(Result).where(Result.job_id == job_id))).scalar_one_or_none()
     if result is None:
@@ -217,7 +219,7 @@ async def job_result(job_id: uuid.UUID, user: BearerUser, db: DbSession):
 
 @router.get("/jobs/{job_id}/events")
 async def job_events(
-    job_id: uuid.UUID, request: Request, user: BearerUser, db: DbSession, settings: AppSettings
+    job_id: uuid.UUID, request: Request, user: JobReader, db: DbSession, settings: AppSettings
 ):
     """Progress stream; a terminal job replays its final event at once (docs/api.md)."""
     await _owned_job(db, job_id, user)

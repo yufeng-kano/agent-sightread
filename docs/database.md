@@ -26,6 +26,11 @@ results          job_id PK/FK, markdown TEXT, pages JSONB, figures JSONB,
 usage_log        id PK, user_id FK, job_id FK, model, prompt_tokens,
                  completion_tokens, cost NUMERIC(12,6), created_at
                  INDEX (user_id, created_at)
+upload_tickets   id PK, user_id FK, token_hash UNIQUE, prefix, job_id FK NULL,
+                 created_at, expires_at, spent_at NULL
+                 INDEX (user_id, created_at)                                 -- mint rate limit
+                 -- single-use upload credential minted by the MCP `parse` tool
+                 -- (auth.md § 5); job_id set when the upload spends the ticket
 oauth_clients    client_id PK, client_name, redirect_uris JSONB, created_at
 oauth_grants     id PK, client_id FK, user_id FK, kind code|access|refresh,
                  token_hash UNIQUE, pkce_challenge NULL, redirect_uri NULL,

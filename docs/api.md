@@ -2,7 +2,7 @@
 
 Two planes, one FastAPI app:
 
-- **Data plane `/v1/*`** — authenticated by API key (`Authorization: Bearer sr_...`) or an OAuth access token ([auth.md](./auth.md)). This is the product.
+- **Data plane `/v1/*`** — authenticated by API key (`Authorization: Bearer sr_...`) or an OAuth access token ([auth.md](./auth.md)). This is the product. `POST /v1/parse` and the three `GET /v1/jobs/{id}*` routes additionally accept a single-use upload ticket (`srt_...`, [auth.md](./auth.md) § 5): one upload, then reads of the job that upload created, nothing else.
 - **Control plane `/api/*`** — session cookie (Google OIDC), consumed only by the Nuxt web app.
 
 `GET /healthz` is public and DB-free (`{"ok": true}`). It backs the compose healthchecks and is also routed to the API on the public origin, so an external monitor can reach it — Caddy's `@api` matcher includes it explicitly ([deployment.md](./deployment.md)). All responses are JSON unless SSE is requested. Errors use one shape:

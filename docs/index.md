@@ -8,11 +8,11 @@ Hosted, multi-user **vision document parsing** service. Users sign in with Googl
 |-----|---------|
 | [product.md](./product.md) | Goals, non-goals, origin spec deviations, tenants |
 | [api.md](./api.md) | REST data plane (`/v1/*`), control plane (`/api/*`), SSE, limits, errors |
-| [auth.md](./auth.md) | Google OIDC sessions, hashed API keys, encrypted OpenRouter keys, OAuth 2.1 AS for Claude Connectors |
+| [auth.md](./auth.md) | Google OIDC sessions, hashed API keys, encrypted OpenRouter keys, OAuth 2.1 AS for Claude Connectors, single-use upload tickets |
 | [parsing.md](./parsing.md) | Poppler pipeline, text-layer vs vision routing, bbox contract, profiles, image normalization |
 | [jobs.md](./jobs.md) | PG job queue (SKIP LOCKED), concurrency caps, SSE progress, dedup cache, file retention |
 | [database.md](./database.md) | PostgreSQL schema, Alembic migrations, secrets handling |
-| [mcp.md](./mcp.md) | MCP server as thin shell over REST, streamable HTTP, Claude Connectors flow |
+| [mcp.md](./mcp.md) | One `parse` tool minting upload tickets + curl commands, streamable HTTP, Claude Connectors flow |
 | [web.md](./web.md) | Nuxt control plane: pages, i18n, design restraint |
 | [project-structure.md](./project-structure.md) | Monorepo layout and module boundaries |
 | [deployment.md](./deployment.md) | docker-compose (local, production, and an overlay for hosts with a front proxy), Caddy, TLS, env vars |

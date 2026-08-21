@@ -220,6 +220,29 @@ class UsageLog(Base):
     created_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, default=utcnow)
 
 
+class UploadTicket(Base):
+    """A single-use upload credential minted by the MCP `parse` tool (docs/auth.md § 5).
+
+    Unspent it authenticates one `POST /v1/parse`; spending it binds `job_id`, after which
+    it only reads that one job. `token_hash` is the SHA-256 of the `srt_...` plaintext.
+    """
+
+    __tablename__ = "upload_tickets"
+    # Mint rate limit: tickets this user created in the last hour.
+    __table_args__ = (Index("ix_upload_tickets_user_created", "user_id", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    prefix: Mapped[str] = mapped_column(String(32))
+    job_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ)
+    spent_at: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ, nullable=True)
+
+
 class OAuthClient(Base):
     """Dynamically registered Claude Connector clients (docs/auth.md § OAuth AS)."""
 

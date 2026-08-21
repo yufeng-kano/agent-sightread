@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     vision_concurrency_per_job: int = 8
     render_workers: int = 0  # 0 means "CPU count", resolved by the worker
     upload_dir: str = "/data/uploads"
+    # Upload tickets minted by the MCP `parse` tool (docs/auth.md § 5).
+    upload_ticket_ttl_seconds: int = 3600
+    upload_ticket_rate_per_hour: int = 30
 
     domain: str = ""
     acme_email: str = ""

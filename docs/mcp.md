@@ -1,6 +1,8 @@
 # MCP server
 
-A **thin shell over the REST service layer** — no parsing logic of its own, no separate auth store. If MCP-the-spec changes, only this shell changes.
+A **thin shell over the REST service layer** — no parsing logic of its own, no separate auth store. The MCP endpoint does exactly one thing: mint a short-lived **upload ticket** and hand back copy-paste `curl` commands. The document bytes themselves never travel through MCP — base64 file content in tool arguments burns ~1.37× the file size in model tokens, so uploads go out-of-band over the existing REST data plane (same pattern as S3 presigned URLs).
+
+This assumes the MCP client can run shell commands with network access to this host (Claude Code has it natively; claude.ai chat/cowork need "Allow network egress" enabled in sandbox settings). Clients without a shell are out of scope.
 
 ## Transport & auth
 
@@ -8,34 +10,41 @@ A **thin shell over the REST service layer** — no parsing logic of its own, no
 - Auth: `Authorization: Bearer` with either an OAuth access token (Claude Connectors path — see [auth.md](./auth.md) § 4) or a project API key (scripts/self-hosted agents). Both resolve to a user; the user's stored OpenRouter key and defaults apply.
 - Never accept tokens in query strings.
 
-## Tools
+## The one tool: `parse`
 
-### parse_document
+Input: none.
 
-Input: `{ source: <base64>, media_type: "application/pdf", pages?: "1-5,8", model?, profile?, force? }`
-No file-path source — hosted service, uploads only ([product.md](./product.md)).
+Output (JSON): a fresh single-use upload ticket ([auth.md](./auth.md) § 5) plus ready-to-run commands, built from `APP_URL`:
 
-Behavior: creates the same job as `POST /v1/parse` (dedup applies), reports MCP progress notifications as pages finish, returns the full result payload of `GET /v1/jobs/{id}/result`. Long documents: keep streaming progress; if the client disconnects, the job keeps running and `get_result` can fetch it later.
+```json
+{
+  "token": "srt_…",
+  "expires_at": "2026-08-21T15:00:00Z",
+  "max_upload_bytes": 134217728,
+  "page_cap": 500,
+  "upload": "curl -sN -H 'Authorization: Bearer srt_…' -H 'Accept: text/event-stream' -F file=@doc.pdf https://<host>/v1/parse -o result.sse",
+  "status": "curl -s -H 'Authorization: Bearer srt_…' https://<host>/v1/jobs/<job_id>",
+  "result": "curl -s -H 'Authorization: Bearer srt_…' https://<host>/v1/jobs/<job_id>/result -o result.json",
+  "notes": "…optional form fields, SSE shape, recovery…"
+}
+```
 
-### parse_image
+- The **upload** command is the primary path: one connection covers upload → progress → final result. The stream ends with a `done` event whose `data:` line is the full result payload (`-o` lands it on disk so the agent can read it selectively instead of flooding its context). A dedup hit streams the single `done` event immediately.
+- **status** / **result** are the fallback for a dropped stream or a second look; `<job_id>` comes from the SSE `progress`/`done` events or from a plain (no `Accept`) upload response.
+- `notes` must spell out: optional form fields (`model`, `profile`, `pages` e.g. `1-5,8`, `force`), PDF or image (jpg/png/webp/heic) both go to the same endpoint, and the recovery rule — if the ticket is spent or expired, call `parse` again; re-uploading the same file returns the cached result instantly ([jobs.md](./jobs.md) § Dedup).
 
-Same, `media_type: image/*` (jpg/png/webp/heic), single page.
+Tool description stays short and explicit about the coordinate contract (`bbox_format`, `sightread://` placeholders, "you crop, we don't").
 
-### get_result
-
-`{ job_id }` → status, or the full result when terminal. Lets a client recover from disconnects.
+There are no other tools. No base64 source, no MCP-side progress notifications, no result relay — the REST plane already does all three better (SSE, dedup, `-o` to disk).
 
 ## Claude Connectors flow (the reason the OAuth AS exists)
 
 1. User adds `https://<host>/mcp` as a custom connector.
 2. Claude discovers `/.well-known/oauth-protected-resource` → AS metadata → performs Dynamic Client Registration → browser consent (Google session) → token.
-3. Tool calls arrive with the OAuth bearer; usage lands in the same `usage_log` as REST calls.
-
-Keep tool descriptions short and explicit about the coordinate contract (`bbox_format`, `sightread://` placeholders, "you crop, we don't").
+3. `parse` calls arrive with the OAuth bearer; the tickets it mints are scoped to that user, and usage lands in the same `usage_log` as REST calls.
 
 ## Implementation notes (as built)
 
 - **Stateless streamable HTTP.** Every request carries its own bearer and gets its own transport, so a connector never depends on session affinity and a token can never be inherited from an earlier session. The SDK's session manager runs for the app's lifetime (FastAPI lifespan).
 - **Auth is ours, not the SDK's.** A small ASGI guard in front of the transport resolves the bearer through the same code path as `/v1` and answers 401 with `WWW-Authenticate: Bearer resource_metadata="<APP_URL>/.well-known/oauth-protected-resource"` — the pointer that starts a connector's OAuth discovery (RFC 9728).
-- **`parse_document` / `parse_image`** take `source` (base64), `media_type`, and the same optional `model` / `profile` / `pages` / `force` as `POST /v1/parse`; they run `jobs.intake`, report MCP progress from `jobs.events`, and return the `GET /v1/jobs/{id}/result` payload (a dedup hit returns it immediately with `meta.cached: true`). A `source` that looks like a filesystem path is refused by name.
-- **`get_result`** returns `{job_id, status, page_count, pages_done, error, result}` — `result` is null until the job is terminal.
+- **`parse`** resolves the caller to a user, mints the ticket via the shared ticket module ([auth.md](./auth.md) § 5 — TTL, mint rate limit, opportunistic cleanup live there, not in MCP), and formats the command strings from `APP_URL`. Nothing else.

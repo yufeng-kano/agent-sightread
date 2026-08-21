@@ -32,7 +32,7 @@ A profile = model id + coordinate prompt template + response parser + `bbox_form
 
 `profile_version` and global `PIPELINE_VERSION` are part of the dedup cache key ([jobs.md](./jobs.md)) so prompt/pipeline improvements invalidate old cached results.
 
-## Image input (parse_image path)
+## Image input
 
 Accepted: jpg, png, webp, heic. Normalization before the vision call, in this order:
 
