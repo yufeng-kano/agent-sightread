@@ -40,16 +40,17 @@ COORDINATE_CONTRACT = (
 
 # Everything the agent needs that is not in a command string (docs/mcp.md § The one tool).
 NOTES = (
-    "Run `upload` — the one command uploads the file, waits on the SSE stream until the "
-    "parse finishes, then lands the document as result.md. Read result.md; NEVER print "
-    "progress.sse — its final `done` event is the entire result JSON on one line and "
-    "will flood your context. To check on a parse use the `status` command or "
-    "`grep -c 'event: done' progress.sse`. Crop boxes are already in result.md: every "
+    "Set `f=` to your file, then run `upload` — the one command uploads it, waits on "
+    "the SSE stream until the parse finishes, and lands the document named after the "
+    "source: paper.pdf becomes paper.md. Read that .md; NEVER print progress.sse — its "
+    "final `done` event is the entire result JSON on one line and will flood your "
+    "context. To check on a parse use the `status` command or "
+    "`grep -c 'event: done' progress.sse`. Crop boxes are already in the .md: every "
     "figure is `![figN](sightread://pPAGE/YMIN,XMIN,YMAX,XMAX)` with an "
     "`<!-- page: N -->` marker before each page's content; coordinates are 0-1000 "
     "normalized to that page, so scale by your rendered page size to crop — no second "
-    "fetch needed. `metadata` (result.json) adds the figures array with captions, page "
-    "dimensions and per-page errors. Optional form fields on the upload: "
+    "fetch needed. `metadata` (<name>.meta.json) adds the figures array with captions, "
+    "page dimensions and per-page errors. Optional form fields on the upload: "
     "`-F model=<id>`, `-F profile=<id>`, `-F pages=1-5,8`, `-F force=true` (bypass the "
     "dedup cache). A PDF and an image (jpg/png/webp/heic) both go to the same endpoint. "
     "`/v1/jobs/last` resolves to this ticket's own job; the explicit "
@@ -93,10 +94,10 @@ def build_server(app: FastAPI) -> MCPServer:
     @server.tool(
         description=(
             "Start a parse: returns a single-use upload ticket and the exact curl commands "
-            "that upload a PDF or image and land the parsed document as result.md (page "
-            "markers included). Takes no arguments — do not send file content here; run "
-            "the returned `upload` command in your shell, then `markdown`. "
-            + COORDINATE_CONTRACT
+            "that upload a PDF or image and land the parsed document as a markdown file "
+            "named after it (page markers included). Takes no arguments — do not send "
+            "file content here; set `f=` to your file and run the returned `upload` "
+            "command in your shell. " + COORDINATE_CONTRACT
         )
     )
     async def parse() -> dict[str, Any]:
@@ -113,13 +114,19 @@ def build_server(app: FastAPI) -> MCPServer:
             "expires_at": expires_at.replace("+00:00", "Z"),
             "max_upload_bytes": settings.upload_max_bytes,
             "page_cap": settings.page_cap,
+            # `f` names the source once; every output file is derived from it, so parsing
+            # several documents into one directory never collides on a generic name.
             "upload": (
-                f"curl -sN {auth} -H 'Accept: text/event-stream' "
-                f"-F file=@doc.pdf {base}/v1/parse -o progress.sse "
-                f"&& curl -s {auth} {base}/v1/jobs/last/result.md -o result.md"
+                f"f=doc.pdf; curl -sN {auth} -H 'Accept: text/event-stream' "
+                f'-F file=@"$f" {base}/v1/parse -o progress.sse '
+                f'&& curl -s {auth} {base}/v1/jobs/last/result.md -o "${{f%.*}}.md"'
             ),
-            "markdown": f"curl -s {auth} {base}/v1/jobs/last/result.md -o result.md",
-            "metadata": f"curl -s {auth} {base}/v1/jobs/last/result -o result.json",
+            "markdown": (
+                f'f=doc.pdf; curl -s {auth} {base}/v1/jobs/last/result.md -o "${{f%.*}}.md"'
+            ),
+            "metadata": (
+                f'f=doc.pdf; curl -s {auth} {base}/v1/jobs/last/result -o "${{f%.*}}.meta.json"'
+            ),
             "status": f"curl -s {auth} {base}/v1/jobs/last",
             "notes": NOTES,
         }

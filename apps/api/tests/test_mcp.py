@@ -106,16 +106,18 @@ async def test_parse_mints_a_ticket_and_ready_to_run_commands(api_client, sessio
     assert payload["expires_at"].endswith("Z")
 
     assert payload["upload"] == (
-        f"curl -sN -H 'Authorization: Bearer {token}' -H 'Accept: text/event-stream' "
-        f"-F file=@doc.pdf {base}/v1/parse -o progress.sse "
+        f"f=doc.pdf; curl -sN -H 'Authorization: Bearer {token}' "
+        f'-H \'Accept: text/event-stream\' -F file=@"$f" {base}/v1/parse -o progress.sse '
         f"&& curl -s -H 'Authorization: Bearer {token}' {base}/v1/jobs/last/result.md "
-        f"-o result.md"
+        f'-o "${{f%.*}}.md"'
     )
     assert payload["markdown"] == (
-        f"curl -s -H 'Authorization: Bearer {token}' {base}/v1/jobs/last/result.md -o result.md"
+        f"f=doc.pdf; curl -s -H 'Authorization: Bearer {token}' {base}/v1/jobs/last/result.md "
+        f'-o "${{f%.*}}.md"'
     )
     assert payload["metadata"] == (
-        f"curl -s -H 'Authorization: Bearer {token}' {base}/v1/jobs/last/result -o result.json"
+        f"f=doc.pdf; curl -s -H 'Authorization: Bearer {token}' {base}/v1/jobs/last/result "
+        f'-o "${{f%.*}}.meta.json"'
     )
     assert payload["status"] == (
         f"curl -s -H 'Authorization: Bearer {token}' {base}/v1/jobs/last"
